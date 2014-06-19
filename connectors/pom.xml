@@ -128,6 +128,7 @@
     <module>connector-solr</module>
     
     <module>sandbox</module>
-
+    <module>translator-couchdb</module>
+    <module>connector-couchdb</module>
   </modules>
 </project>
