@@ -272,6 +272,13 @@ public class TestProcessor {
             	fail("did not complete processing");
             }
             rowCount = id.getRowCount();
+    		if(DEBUG) {
+                System.out.println("\nResults:\n" + id.getSchema()); //$NON-NLS-1$
+                TupleSource ts2 = id.createIndexedTupleSource();
+                for(int j=0; j<rowCount; j++) {
+                    System.out.println("" + j + ": " + ts2.nextTuple());	 //$NON-NLS-1$ //$NON-NLS-2$
+                }
+            }
             if ( expectedResults != null ) {
             	examineResults(expectedResults, bufferMgr, id);
             }
@@ -299,15 +306,6 @@ public class TestProcessor {
         TupleSource ts = tsID.createIndexedTupleSource();
         int count = tsID.getRowCount();   
 
-		if(DEBUG) {
-            System.out.println("\nResults:\n" + tsID.getSchema()); //$NON-NLS-1$
-            TupleSource ts2 = tsID.createIndexedTupleSource();
-            for(int j=0; j<count; j++) {
-                System.out.println("" + j + ": " + ts2.nextTuple());	 //$NON-NLS-1$ //$NON-NLS-2$
-            }    
-            ts2.closeSource();
-        }
-        
         // Compare actual to expected row count
         assertEquals("Did not get expected row count: ", expectedResults.length, count); //$NON-NLS-1$
      
@@ -996,10 +994,10 @@ public class TestProcessor {
         
         // Create expected results
         List[] expected = new List[] { 
-            Arrays.asList(new Object[] { null,  null }),
             Arrays.asList(new Object[] { "a",   "a" }), //$NON-NLS-1$ //$NON-NLS-2$
+            Arrays.asList(new Object[] { null,  null }),
+            Arrays.asList(new Object[] { "c",   "c" }), //$NON-NLS-1$ //$NON-NLS-2$
             Arrays.asList(new Object[] { "b",   "b" }), //$NON-NLS-1$ //$NON-NLS-2$
-            Arrays.asList(new Object[] { "c",   "c" }) //$NON-NLS-1$ //$NON-NLS-2$
         };    
         
         // Construct data manager with data
@@ -2596,7 +2594,7 @@ public class TestProcessor {
     } 
 
     @Test public void testCorrelatedSubquery_defect10021() {
-        String sql = "Select e1, e2 from table1 X where e4 in (select max(Y.e4) FROM table1 Y WHERE X.e4 = Y.e4)"; //$NON-NLS-1$
+        String sql = "Select e1, e2 from table1 X where e4 in /*+ no_unnest */ (select max(Y.e4) FROM table1 Y WHERE X.e4 = Y.e4)"; //$NON-NLS-1$
 
         // Create expected results
         List[] expected = new List[] {
@@ -4286,10 +4284,10 @@ public class TestProcessor {
 
         // Create expected results
         List[] expected = new List[] { 
-            Arrays.asList(new Object[] { null, null }), 
-            Arrays.asList(new Object[] { "A", "a" }), //$NON-NLS-1$ //$NON-NLS-2$
+    		Arrays.asList(new Object[] { "A", "a" }), //$NON-NLS-1$ //$NON-NLS-2$
+            Arrays.asList(new Object[] { null, null }),
+            Arrays.asList(new Object[] { "C", "c" }), //$NON-NLS-1$ //$NON-NLS-2$
             Arrays.asList(new Object[] { "B", "b" }), //$NON-NLS-1$ //$NON-NLS-2$
-            Arrays.asList(new Object[] { "C", "c" }) //$NON-NLS-1$ //$NON-NLS-2$
         };    
     
         // Construct data manager with data
@@ -4309,10 +4307,10 @@ public class TestProcessor {
 
         // Create expected results
         List[] expected = new List[] { 
-            Arrays.asList(new Object[] { null, null }), 
-            Arrays.asList(new Object[] { "A", "a" }), //$NON-NLS-1$ //$NON-NLS-2$
+    		Arrays.asList(new Object[] { "A", "a" }), //$NON-NLS-1$ //$NON-NLS-2$
+    		Arrays.asList(new Object[] { null, null }),
+    		Arrays.asList(new Object[] { "C", "c" }), //$NON-NLS-1$ //$NON-NLS-2$
             Arrays.asList(new Object[] { "B", "b" }), //$NON-NLS-1$ //$NON-NLS-2$
-            Arrays.asList(new Object[] { "C", "c" }) //$NON-NLS-1$ //$NON-NLS-2$
         };    
     
         // Construct data manager with data
@@ -4332,10 +4330,10 @@ public class TestProcessor {
 
         // Create expected results
         List[] expected = new List[] { 
-            Arrays.asList(new Object[] { null, null }), 
-            Arrays.asList(new Object[] { "a", "a" }), //$NON-NLS-1$ //$NON-NLS-2$
+    		Arrays.asList(new Object[] { "a", "a" }), //$NON-NLS-1$ //$NON-NLS-2$
+            Arrays.asList(new Object[] { null, null }),
+            Arrays.asList(new Object[] { "c", "c" }), //$NON-NLS-1$ //$NON-NLS-2$
             Arrays.asList(new Object[] { "b", "b" }), //$NON-NLS-1$ //$NON-NLS-2$
-            Arrays.asList(new Object[] { "c", "c" }) //$NON-NLS-1$ //$NON-NLS-2$
         };    
     
         // Construct data manager with data
@@ -4380,10 +4378,10 @@ public class TestProcessor {
 
         // Create expected results
         List[] expected = new List[] { 
-            Arrays.asList(new Object[] { null, null }), 
-            Arrays.asList(new Object[] { "a", "a" }), //$NON-NLS-1$ //$NON-NLS-2$
+    		Arrays.asList(new Object[] { "a", "a" }), //$NON-NLS-1$ //$NON-NLS-2$
+            Arrays.asList(new Object[] { null, null }),
+            Arrays.asList(new Object[] { "c", "c" }), //$NON-NLS-1$ //$NON-NLS-2$
             Arrays.asList(new Object[] { "b", "b" }), //$NON-NLS-1$ //$NON-NLS-2$
-            Arrays.asList(new Object[] { "c", "c" }) //$NON-NLS-1$ //$NON-NLS-2$
         };    
     
         // Construct data manager with data
@@ -6877,7 +6875,7 @@ public class TestProcessor {
         
         QueryMetadataInterface metadata = RealMetadataFactory.example1Cached();
         
-        ProcessorPlan plan = helpGetPlan(helpParse(sql), metadata, TestOptimizer.getGenericFinder());
+        ProcessorPlan plan = helpGetPlan(helpParse(sql), metadata, new DefaultCapabilitiesFinder());
         
         TestOptimizer.checkNodeTypes(plan, new int[] {
             1,      // Access
@@ -6891,7 +6889,7 @@ public class TestProcessor {
             0,      // Null
             0,      // PlanExecution
             1,      // Project
-            0,      // Select
+            1,      // Select
             0,      // Sort
             0       // UnionAll
        });     
@@ -7397,8 +7395,8 @@ public class TestProcessor {
         		Arrays.asList("a", "a"),
         		Arrays.asList("a", "a"),
         		Arrays.asList("a", "a"),
-        		Arrays.asList("b", "b"),
         		Arrays.asList("c", "c"),
+        		Arrays.asList("b", "b"),
         };    
     
         FakeDataManager dataManager = new FakeDataManager();
@@ -7728,7 +7726,7 @@ public class TestProcessor {
     
         // Construct data manager with data
         HardcodedDataManager hdm = new HardcodedDataManager();
-        hdm.addData("SELECT RAND() FROM pm1.g1", expected);
+        hdm.addData("SELECT RAND() FROM pm1.g1", new List[] {Arrays.asList(.1), Arrays.asList(.2)});
         hdm.addData("SELECT pm1.g1.e2, pm1.g1.e1 FROM pm1.g1", new List<?>[] {Arrays.asList(1, "a")});
         BasicSourceCapabilities bsc = new BasicSourceCapabilities();
         bsc.setCapabilitySupport(Capability.QUERY_SELECT_EXPRESSION, true);
@@ -7737,6 +7735,23 @@ public class TestProcessor {
         CommandContext cc = createCommandContext();
         ProcessorPlan plan = helpGetPlan(helpParse(sql), RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), cc);
 
+        helpProcess(plan, cc, hdm, expected);
+        
+        bsc.setFunctionSupport(SourceSystemFunctions.RAND, false);
+        
+        plan = helpGetPlan(helpParse(sql), RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(bsc), cc);
+
+        hdm = new HardcodedDataManager();
+        hdm.addData("SELECT 'a' FROM pm1.g1", new List[] {Arrays.asList("a"), Arrays.asList("a")});
+        hdm.addData("SELECT pm1.g1.e2, pm1.g1.e1 FROM pm1.g1", new List<?>[] {Arrays.asList(1, "a")});
+
+        Random r = new Random(0);
+        r.nextDouble();
+        expected = new List[] { 
+                Arrays.asList(r.nextDouble(), "a"),
+                Arrays.asList(r.nextDouble(), "a"),
+        };
+        
         helpProcess(plan, cc, hdm, expected);
     }
     
@@ -7767,6 +7782,56 @@ public class TestProcessor {
         sampleData1(fdm);
         helpProcess(plan, fdm, new List[] {Arrays.asList(11)});
     }
+    
+    
+    @Test public void testNonDeterministicBlockingSubquery() {
+        String sql = "select count(distinct x) from (select (select rand() from pm1.g1 limit 1) as x from pm1.g1) as y"; //$NON-NLS-1$
+
+        ProcessorPlan plan = helpGetPlan(sql, RealMetadataFactory.example1Cached());
+        FakeDataManager fdm = new FakeDataManager();
+        fdm.setBlockOnce();
+        sampleData1(fdm);
+        helpProcess(plan, fdm, new List[] {Arrays.asList(6)});
+    }
+    
+    @Test public void testRenaming() {
+        String sql = "Select (select e4 from pm1.g1 X__1), pm1.g1.e2 from pm1.g1, /*+ makeind */ (select e1 from pm2.g1) AS X__1, (select distinct e2, e3 from pm3.g1) X__2 where pm1.g1.e3 = X__1.e1 and pm1.g1.e2 = year(X__2.e3)"; //$NON-NLS-1$
+
+        // Create expected results
+        List[] expected = new List[] {
+        };
+
+        HardcodedDataManager hdm = new HardcodedDataManager(false);
+        // Plan query
+        ProcessorPlan plan = helpGetPlan(sql, RealMetadataFactory.example1Cached(), new DefaultCapabilitiesFinder(TestOptimizer.getTypicalCapabilities()));
+
+        // Run query
+        helpProcess(plan, hdm, expected);
+    } 
+
+    @Test public void testLateralJoinWithScalarView() {
+        String sql = "SELECT CAST(g1.col AS string), g0.a FROM (select 'a' as a, ('a',) as c) AS g0, TABLE(select array_get(g0.c, 1) as col) AS g1 WHERE ENDSWITH('a', CAST(g1.col AS string)) = TRUE ORDER BY g0.a"; //$NON-NLS-1$
+        
+        ProcessorPlan plan = helpGetPlan(sql, RealMetadataFactory.example1Cached());
+        FakeDataManager fdm = new FakeDataManager();
+        helpProcess(plan, fdm, new List[] {Arrays.asList("a", "a")});
+    }
+    
+	@Test public void testSomething() throws Exception {
+		String sql = "SELECT csv_table.* FROM (exec sq1()) f, TEXTTABLE(f.e1 COLUMNS a STRING, b STRING DELIMITER ',' QUOTE '''' SKIP 1) csv_table LEFT JOIN (SELECT '1' as a, '2' as b) as t ON csv_table.a = t.a;";
+		ProcessorPlan plan = TestProcessor.helpGetPlan(sql, RealMetadataFactory.example1Cached());
+		HardcodedDataManager dataManager = new HardcodedDataManager();
+		dataManager.addData("SELECT pm1.g1.e1, pm1.g1.e2 FROM pm1.g1", Arrays.asList("a,b", 1), Arrays.asList("a,b\n1,2\n3,4", 1));
+		TestProcessor.helpProcess(plan, dataManager, new List<?>[] {Arrays.asList("1", "2"), Arrays.asList("3", "4")});
+	 }
+	
+	@Test public void testSomething1() throws Exception {
+		String sql = "SELECT csv_table.* FROM (exec sq1()) f, TEXTTABLE(f.e1 COLUMNS a STRING, b STRING DELIMITER ',' QUOTE '''' SKIP 1) csv_table JOIN (SELECT '1' as a, '2' as b) as t ON csv_table.a = t.a;";
+		ProcessorPlan plan = TestProcessor.helpGetPlan(sql, RealMetadataFactory.example1Cached());
+		HardcodedDataManager dataManager = new HardcodedDataManager();
+		dataManager.addData("SELECT pm1.g1.e1, pm1.g1.e2 FROM pm1.g1", Arrays.asList("a,b", 1), Arrays.asList("a,b\n1,2\n3,4", 1));
+		TestProcessor.helpProcess(plan, dataManager, new List<?>[] {Arrays.asList("1", "2")});
+	 }
     
     private static final boolean DEBUG = false;
 }

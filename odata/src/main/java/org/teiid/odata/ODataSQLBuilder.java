@@ -49,6 +49,7 @@ import org.odata4j.expression.OrderByExpression.Direction;
 import org.odata4j.producer.QueryInfo;
 import org.teiid.core.types.DataTypeManager;
 import org.teiid.core.types.JDBCSQLTypeInfo;
+import org.teiid.core.util.Assertion;
 import org.teiid.metadata.Column;
 import org.teiid.metadata.ForeignKey;
 import org.teiid.metadata.KeyRecord;
@@ -62,6 +63,7 @@ import org.teiid.query.sql.symbol.ElementSymbol;
 import org.teiid.query.sql.symbol.Expression;
 import org.teiid.query.sql.symbol.Function;
 import org.teiid.query.sql.symbol.GroupSymbol;
+import org.teiid.query.sql.symbol.MultipleElementSymbol;
 import org.teiid.query.sql.symbol.Reference;
 import org.teiid.translator.SourceSystemFunctions;
 import org.teiid.translator.odata.ODataTypeManager;
@@ -69,7 +71,7 @@ import org.teiid.translator.odata.ODataTypeManager;
 public class ODataSQLBuilder extends ODataHierarchyVisitor {
 	private Query query = new Query();
 	private OrderBy orderBy = new OrderBy();
-	private Criteria criteria;
+	private Criteria where;
 	private MetadataStore metadata;
 	private ArrayList<SQLParam> params = new ArrayList<SQLParam>();
 	private boolean prepared = true;
@@ -82,17 +84,12 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 	private HashMap<String, String> aliasTableNames = new HashMap<String, String>();
 	private AtomicInteger groupCount = new AtomicInteger(1);
 	private boolean distinct = false;
-	private boolean useLimit = true;
 
 	public ODataSQLBuilder(MetadataStore metadata, boolean prepared) {
 		this.metadata = metadata;
 		this.prepared = prepared;
 	}
 	
-	public void setUseLimit(boolean useLimit) {
-		this.useLimit = useLimit;
-	}
-
 	public Query selectString(String entityName, QueryInfo info, OEntityKey key, String navProperty, boolean countStar) {
 		Select select = new Select();
 
@@ -104,12 +101,12 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		
 		Table entityTable = findTable(entityName, metadata);
 		this.resultEntityTable = entityTable;
-		this.resultEntityGroup = new GroupSymbol("g0", entityName);
-		this.assosiatedTables.put(entityTable.getName(), this.resultEntityGroup);
-		this.aliasTableNames.put("g0", entityTable.getName());
+		this.resultEntityGroup = new GroupSymbol("g0", entityTable.getFullName());
+		this.assosiatedTables.put(entityTable.getFullName(), this.resultEntityGroup);
+		this.aliasTableNames.put("g0", entityTable.getFullName());
 		
 		if (key != null) {
-			this.criteria = buildEntityKeyCriteria(entityTable, this.resultEntityGroup, key);
+			this.where = buildEntityKeyCriteria(entityTable, this.resultEntityGroup, key);
 		}
 		
 		this.fromCluse = new UnaryFromClause(this.resultEntityGroup);
@@ -144,7 +141,7 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 	        	for (ForeignKey fk:joinTable.getForeignKeys()) {
 	        		if (fk.getReferenceKey().getParent().equals(entityTable)) {
 
-	        			if(this.assosiatedTables.get(joinTable.getName()) == null) {
+	        			if(this.assosiatedTables.get(joinTable.getFullName()) == null) {
 		        			List<String> refColumns = fk.getReferenceColumns();
 		        			if (refColumns == null) {
 		        				refColumns = getColumnNames(entityTable.getPrimaryKey().getColumns());
@@ -160,7 +157,7 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 	        	if (!associationFound) {
 	            	for (ForeignKey fk:entityTable.getForeignKeys()) {
 	            		if (fk.getReferenceKey().getParent().equals(joinTable)) {
-	            			if(this.assosiatedTables.get(joinTable.getName()) == null) {
+	            			if(this.assosiatedTables.get(joinTable.getFullName()) == null) {
 	            				List<String> refColumns = fk.getReferenceColumns();
 	            				if (refColumns == null) {
 	            					refColumns = getColumnNames(joinTable.getPrimaryKey().getColumns());
@@ -174,21 +171,16 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 	        	}
 	        	
 	        	if (!associationFound) {
-	        		throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16003, prop, resultEntityTable.getName()));
+	        		throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16003, prop, resultEntityTable.getFullName()));
 	        	}
     			
     			entityTable = joinTable;
-    			this.resultEntityGroup = this.assosiatedTables.get(joinTable.getName());
+    			this.resultEntityGroup = this.assosiatedTables.get(joinTable.getFullName());
     			this.resultEntityTable = entityTable;	        	
 	        	
 	            if (propSplit.length > 1) {
 	                key = OEntityKey.parse("("+ propSplit[1]);
-	                if (this.criteria != null) {
-	                	this.criteria = new CompoundCriteria(CompoundCriteria.AND, this.criteria, buildEntityKeyCriteria(entityTable, this.resultEntityGroup, key));
-	                }
-	                else {
-	                	this.criteria = buildEntityKeyCriteria(entityTable, this.resultEntityGroup, key);
-	                }
+                	this.where = Criteria.combineCriteria(this.where, buildEntityKeyCriteria(entityTable, this.resultEntityGroup, key));
 	            }
 			}
 		}
@@ -202,37 +194,44 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		}
 		
 		if (info.filter != null) {
+			Assertion.assertTrue(this.stack.isEmpty());
 			visitNode(info.filter);
+			Expression ex = this.getExpression();
+			if (!(ex instanceof Criteria)) {
+				ex = new ExpressionCriteria(ex);
+			}
+			this.where = Criteria.combineCriteria(this.where, (Criteria) ex);
 		}
 
-		// order by
-		List<OrderByExpression> orderBy = info.orderBy;
-		if (orderBy != null && !orderBy.isEmpty()) {
-			for (OrderByExpression expr:info.orderBy) {
-				visitNode(expr);
+		if (!countStar) {
+			// order by
+			if (info.orderBy != null && !info.orderBy.isEmpty()) {
+				for (OrderByExpression expr:info.orderBy) {
+					visitNode(expr);
+				}
+				query.setOrderBy(this.orderBy);
 			}
-			query.setOrderBy(this.orderBy);
+			else {
+				KeyRecord record = resultEntityTable.getPrimaryKey();
+				if (record == null) {
+					// if PK is not available there MUST at least one unique key
+					record = resultEntityTable.getUniqueKeys().get(0);
+				}
+				// provide implicit ordering for cursor logic
+				for (Column column:record.getColumns()) {
+					OrderByExpression expr = org.odata4j.expression.Expression.orderBy(org.odata4j.expression.Expression.simpleProperty(column.getName()), Direction.ASCENDING);
+					visitNode(expr);
+				}
+				query.setOrderBy(this.orderBy);
+			}
+	
+			select.setDistinct(this.distinct);
 		}
-		else {
-			KeyRecord record = resultEntityTable.getPrimaryKey();
-			if (record == null) {
-				// if PK is not available there MUST at least one unique key
-				record = resultEntityTable.getUniqueKeys().get(0);
-			}
-			// provide implicit ordering for cursor logic
-			for (Column column:record.getColumns()) {
-				OrderByExpression expr = org.odata4j.expression.Expression.orderBy(org.odata4j.expression.Expression.simpleProperty(column.getName()), Direction.ASCENDING);
-				visitNode(expr);
-			}
-			query.setOrderBy(this.orderBy);
-		}
-
-		select.setDistinct(this.distinct);
 		From from = new From();
 		from.addClause(this.fromCluse);
 		query.setSelect(select);
 		query.setFrom(from);
-		query.setCriteria(this.criteria);
+		query.setCriteria(this.where);
 		return query;
 	}
 	
@@ -250,7 +249,7 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
     		throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16004, tableName));
     	}
     	
-    	String joinKey = (alias != null)?alias:joinTable.getName();
+    	String joinKey = (alias != null)?alias:joinTable.getFullName();
     	String aliasGroup = (alias == null)?"g"+this.groupCount.getAndIncrement():alias;
     	
     	for (ForeignKey fk:this.resultEntityTable.getForeignKeys()) {
@@ -262,7 +261,7 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
     				}    				
     				addJoinTable(aliasGroup, joinType, joinTable, this.resultEntityTable, getColumnNames(fk.getColumns()), refColumns);    				
     			}
-    			return this.assosiatedTables.get(alias!=null?aliasGroup:joinTable.getName());
+    			return this.assosiatedTables.get(alias!=null?aliasGroup:joinTable.getFullName());
     		}
     	}
     	
@@ -276,7 +275,7 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
     				}    				
     				addJoinTable(aliasGroup, joinType, joinTable, this.resultEntityTable, refColumns, getColumnNames(fk.getColumns()));
     			}
-    			return this.assosiatedTables.get(alias!=null?aliasGroup:joinTable.getName());
+    			return this.assosiatedTables.get(alias!=null?aliasGroup:joinTable.getFullName());
     		}
     	}
     	return null;
@@ -286,8 +285,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 			final Table joinTable, final Table entityTable, List<String> pkColumns,
 			List<String> refColumns) {
 		
-		GroupSymbol joinGroup = new GroupSymbol(alias, joinTable.getName());
-		GroupSymbol entityGroup = this.assosiatedTables.get(entityTable.getName());
+		GroupSymbol joinGroup = new GroupSymbol(alias, joinTable.getFullName());
+		GroupSymbol entityGroup = this.assosiatedTables.get(entityTable.getFullName());
 		
 		List<Criteria> critList = new ArrayList<Criteria>();
 
@@ -308,8 +307,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 			this.fromCluse = new JoinPredicate(this.fromCluse, new UnaryFromClause(joinGroup), joinType, crit);
 		}
 		this.assosiatedTables.put(alias, joinGroup);
-		this.assosiatedTables.put(joinTable.getName(), joinGroup);
-		this.aliasTableNames.put(alias, joinTable.getName());
+		this.assosiatedTables.put(joinTable.getFullName(), joinGroup);
+		this.aliasTableNames.put(alias, joinTable.getFullName());
 	}
 
 	private Criteria buildEntityKeyCriteria(Table table, GroupSymbol entityGroup, OEntityKey entityKey) {
@@ -361,25 +360,13 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 			}
 		} else {
 			for (Column c:table.getColumns()) {
-				select.addSymbol(new ElementSymbol(c.getName(), group));
 				selectColumns.put(c.getName(), Boolean.TRUE);
 			}
+			//use select x.* to avoid selecting unselectable columns
+			//and possibly to exclude columns that the user is not entitled to
+			select.addSymbol(new MultipleElementSymbol(group.getName()));
 		}
 		return select;
-	}
-
-	public Query countStarString(String entityName, QueryInfo info) {
-		Table table = findTable(entityName, metadata);
-		AggregateSymbol aggregateSymbol = new AggregateSymbol(AggregateSymbol.Type.COUNT.name(), false, null);
-
-		query.setSelect(new Select(Arrays.asList(aggregateSymbol)));
-    	query.setFrom(new From(Arrays.asList(new UnaryFromClause(new GroupSymbol(table.getFullName())))));
-		
-		if (info.filter != null) {
-			visitNode(info.filter);
-		}
-		query.setCriteria(this.criteria);
-		return this.query;
 	}
 
 	@Override
@@ -396,9 +383,6 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 	@Override
 	public void visit(Direction direction) {
 		Expression expr = stack.pop();
-		if (expr instanceof CompareCriteria) {
-			expr = ((CompareCriteria)expr).getLeftExpression();
-		}
 		this.orderBy.addVariable(expr, direction == Direction.ASCENDING);
 	}
 
@@ -417,8 +401,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		visitNode(expr.getRHS());
 		Expression rhs = stack.pop();
 		Expression lhs = stack.pop();
-		this.criteria = new CompoundCriteria(CompoundCriteria.AND, (Criteria)lhs, (Criteria)rhs);
-		stack.push(this.criteria);
+		Criteria criteria = new CompoundCriteria(CompoundCriteria.AND, (Criteria)lhs, (Criteria)rhs);
+		stack.push(criteria);
 	}
 
 	@Override
@@ -493,8 +477,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		Expression target = stack.pop();
 		visitNode(expr.getValue());
 		Expression value = stack.pop();		
-		this.criteria = new CompareCriteria(new Function("ENDSWITH", new Expression[] {target, value}), CompareCriteria.EQ, new Constant(Boolean.TRUE));
-		stack.push(this.criteria);
+		Criteria criteria = new CompareCriteria(new Function("ENDSWITH", new Expression[] {target, value}), CompareCriteria.EQ, new Constant(Boolean.TRUE));
+		stack.push(criteria);
 	}
 
 	@Override
@@ -526,13 +510,14 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		visitNode(expr.getRHS());
 		Expression rhs = stack.pop();
 		Expression lhs = stack.pop();
+		Criteria criteria = null;
 		if (rhs instanceof Constant && ((Constant)rhs).getType() == DataTypeManager.DefaultDataClasses.NULL) {
-			this.criteria = new IsNullCriteria(lhs);
+			criteria = new IsNullCriteria(lhs);
 		}
 		else {
-			this.criteria = new CompareCriteria(lhs, CompareCriteria.EQ, rhs);
+			criteria = new CompareCriteria(lhs, CompareCriteria.EQ, rhs);
 		}
-		stack.push(this.criteria);
+		stack.push(criteria);
 	}
 
 	@Override
@@ -541,8 +526,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		visitNode(expr.getRHS());
 		Expression rhs = stack.pop();
 		Expression lhs = stack.pop();		
-		this.criteria = new CompareCriteria(lhs, CompareCriteria.GE, rhs);
-		stack.push(this.criteria);
+		Criteria criteria = new CompareCriteria(lhs, CompareCriteria.GE, rhs);
+		stack.push(criteria);
 	}
 
 	@Override
@@ -551,8 +536,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		visitNode(expr.getRHS());
 		Expression rhs = stack.pop();
 		Expression lhs = stack.pop();		
-		this.criteria = new CompareCriteria(lhs, CompareCriteria.GT, rhs);
-		stack.push(this.criteria);
+		Criteria criteria = new CompareCriteria(lhs, CompareCriteria.GT, rhs);
+		stack.push(criteria);
 	}
 
 	@Override
@@ -663,8 +648,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		visitNode(expr.getRHS());
 		Expression rhs = stack.pop();
 		Expression lhs = stack.pop();		
-		this.criteria = new CompareCriteria(lhs, CompareCriteria.LE, rhs);
-		stack.push(this.criteria);
+		Criteria criteria = new CompareCriteria(lhs, CompareCriteria.LE, rhs);
+		stack.push(criteria);
 	}
 
 	@Override
@@ -679,8 +664,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		visitNode(expr.getRHS());
 		Expression rhs = stack.pop();
 		Expression lhs = stack.pop();		
-		this.criteria = new CompareCriteria(lhs, CompareCriteria.LT, rhs);
-		stack.push(this.criteria);
+		Criteria criteria = new CompareCriteria(lhs, CompareCriteria.LT, rhs);
+		stack.push(criteria);
 	}
 
 	@Override
@@ -707,15 +692,16 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		visitNode(expr.getRHS());
 		Expression rhs = stack.pop();
 		Expression lhs = stack.pop();
+		Criteria criteria = null;
 		if (rhs instanceof Constant && ((Constant)rhs).getType() == DataTypeManager.DefaultDataClasses.NULL) {
 			IsNullCriteria crit = new IsNullCriteria(lhs);
 			crit.setNegated(true);
-			this.criteria = crit;
+			criteria = crit;
 		}
 		else {
-			this.criteria = new CompareCriteria(lhs, CompareCriteria.NE, rhs);
+			criteria = new CompareCriteria(lhs, CompareCriteria.NE, rhs);
 		}
-		stack.push(this.criteria);
+		stack.push(criteria);
 	}
 
 	@Override
@@ -728,8 +714,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 	@Override
 	public void visit(NotExpression expr) {
 		visitNode(expr.getExpression());
-		this.criteria = new NotCriteria(new ExpressionCriteria(stack.pop()));
-		stack.push(this.criteria);
+		Criteria criteria = new NotCriteria(new ExpressionCriteria(stack.pop()));
+		stack.push(criteria);
 	}
 
 	@Override
@@ -743,8 +729,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		visitNode(expr.getRHS());
 		Expression rhs = stack.pop();
 		Expression lhs = stack.pop();
-		this.criteria = new CompoundCriteria(CompoundCriteria.OR, (Criteria)lhs, (Criteria)rhs);
-		stack.push(this.criteria);
+		Criteria criteria = new CompoundCriteria(CompoundCriteria.OR, (Criteria)lhs, (Criteria)rhs);
+		stack.push(criteria);
 	}
 
 	@Override
@@ -779,8 +765,8 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		Expression target = stack.pop();
 		visitNode(expr.getValue());
 		Expression value = stack.pop();		
-		this.criteria = new CompareCriteria(new Function("LOCATE", new Expression[] {value, target, new Constant(1)}), compare, new Constant(1));
-		stack.push(this.criteria);
+		Criteria criteria = new CompareCriteria(new Function("LOCATE", new Expression[] {value, target, new Constant(1)}), compare, new Constant(1));
+		stack.push(criteria);
 	}
 
 	@Override
@@ -926,34 +912,43 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 		
 		String tblName = ((EntitySimpleProperty)expr.getSource()).getPropertyName();
 		Table joinTable = findTable(tblName, this.metadata);
-		GroupSymbol joinGroup = new GroupSymbol(expr.getVariable(),tblName);
-		
 		if (joinTable == null) {
 			throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16009, tblName));
 		}
+		GroupSymbol joinGroup = new GroupSymbol(expr.getVariable(),joinTable.getFullName());
 		
 		ODataAggregateAnyBuilder builder = new ODataAggregateAnyBuilder(expr,
 				this.resultEntityTable, this.resultEntityGroup, joinTable, joinGroup);
-		this.criteria = builder.getCriteria();
+		Criteria criteria = builder.getCriteria();
 		stack.push(criteria);
+	}
+	
+	private Table findTable(EdmEntitySet entity, MetadataStore store) {
+		return findTable(entity.getType().getFullyQualifiedTypeName(), store);
 	}
 
 	private Table findTable(String tableName, MetadataStore store) {
-		for (Schema s : store.getSchemaList()) {
-			for (Table t : s.getTables().values()) {
-				if (t.getFullName().equals(tableName)) {
+		int idx = tableName.indexOf('.');
+		if (idx > 0) {
+			Schema s = store.getSchema(tableName.substring(0, idx));
+			if (s != null) {
+				Table t = s.getTable(tableName.substring(idx+1));
+				if (t != null) {
 					return t;
 				}
 			}
 		}
+		Table result = null;
 		for (Schema s : store.getSchemaList()) {
-			for (Table t : s.getTables().values()) {
-				if (t.getName().equals(tableName)) {
-					return t;
+			Table t = s.getTables().get(tableName);
+			if (t != null) {
+				if (result != null) {
+					throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16017, tableName));
 				}
+				result = t;
 			}
 		}		
-		return null;
+		return result;
 	}
 
 	private Column findColumn(Table table, String propertyName) {
@@ -982,9 +977,9 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 	
 	public Insert insert(EdmEntitySet entitySet, OEntity entity) {
 
-		Table entityTable = findTable(entitySet.getName(), this.metadata);
+		Table entityTable = findTable(entitySet, this.metadata);
 		this.resultEntityTable = entityTable;
-		this.resultEntityGroup = new GroupSymbol(entitySet.getName());
+		this.resultEntityGroup = new GroupSymbol(entityTable.getFullName());
 	    
 		List values = new ArrayList();
 		
@@ -1007,7 +1002,7 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 	
 	//TODO: allow the generated key building.
 	public OEntityKey buildEntityKey(EdmEntitySet entitySet, OEntity entity, Map<String, Object> generatedKeys) {
-		Table entityTable = findTable(entitySet.getName(), this.metadata);
+		Table entityTable = findTable(entitySet, this.metadata);
 		KeyRecord pk = entityTable.getPrimaryKey();
 		List<OProperty<?>> props = new ArrayList<OProperty<?>>();
 		for (Column c:pk.getColumns()) {
@@ -1036,9 +1031,9 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 
 	public Delete delete(EdmEntitySet entitySet, OEntityKey entityKey) {
 		
-		Table entityTable = findTable(entitySet.getName(), this.metadata);
+		Table entityTable = findTable(entitySet, this.metadata);
 		this.resultEntityTable = entityTable;
-		this.resultEntityGroup = new GroupSymbol(entitySet.getName());
+		this.resultEntityGroup = new GroupSymbol(entityTable.getFullName());
 
 		Delete delete = new Delete();
 		delete.setGroup(this.resultEntityGroup);
@@ -1048,9 +1043,9 @@ public class ODataSQLBuilder extends ODataHierarchyVisitor {
 	}
 
 	public Update update(EdmEntitySet entitySet, OEntity entity) {
-		Table entityTable = findTable(entitySet.getName(), this.metadata);
+		Table entityTable = findTable(entitySet, this.metadata);
 		this.resultEntityTable = entityTable;
-		this.resultEntityGroup = new GroupSymbol(entitySet.getName());
+		this.resultEntityGroup = new GroupSymbol(entityTable.getFullName());
 		
 		Update update = new Update();
 		update.setGroup(this.resultEntityGroup);

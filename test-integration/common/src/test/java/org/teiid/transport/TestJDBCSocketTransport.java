@@ -22,11 +22,19 @@
 
 package org.teiid.transport;
 
-import static org.junit.Assert.*;
+import static org.junit.Assert.assertArrayEquals;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.io.ByteArrayInputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.NotSerializableException;
+import java.io.StringReader;
 import java.net.InetSocketAddress;
+import java.sql.Blob;
 import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -42,9 +50,14 @@ import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.teiid.common.buffer.BufferManagerFactory;
-import org.teiid.common.buffer.StorageManager;
+import org.teiid.common.buffer.impl.BufferManagerImpl;
 import org.teiid.core.types.ArrayImpl;
+import org.teiid.core.types.BlobImpl;
 import org.teiid.core.types.BlobType;
+import org.teiid.core.types.ClobImpl;
+import org.teiid.core.types.ClobType;
+import org.teiid.core.types.GeometryType;
+import org.teiid.core.types.InputStreamFactory;
 import org.teiid.core.util.ObjectConverterUtil;
 import org.teiid.core.util.UnitTestUtil;
 import org.teiid.dqp.internal.datamgr.ConnectorManagerRepository;
@@ -57,7 +70,9 @@ import org.teiid.jdbc.TeiidSQLException;
 import org.teiid.jdbc.TestMMDatabaseMetaData;
 import org.teiid.net.CommunicationException;
 import org.teiid.net.ConnectionException;
+import org.teiid.net.TeiidURL;
 import org.teiid.net.socket.SocketServerConnectionFactory;
+import org.teiid.query.function.GeometryUtils;
 import org.teiid.runtime.EmbeddedConfiguration;
 import org.teiid.runtime.HardCodedExecutionFactory;
 import org.teiid.translator.TranslatorException;
@@ -67,9 +82,11 @@ import org.teiid.translator.ws.BinaryWSProcedureExecution;
 public class TestJDBCSocketTransport {
 
 	private static final int MAX_MESSAGE = 100000;
+	private static final int MAX_LOB = 10000;
 	static InetSocketAddress addr;
 	static SocketListener jdbcTransport;
 	static FakeServer server;
+	static int delay;
 	
 	@BeforeClass public static void oneTimeSetup() throws Exception {
 		SocketConfiguration config = new SocketConfiguration();
@@ -86,13 +103,22 @@ public class TestJDBCSocketTransport {
 		
 		jdbcTransport = new SocketListener(addr, config, server.getClientServiceRegistry(), BufferManagerFactory.getStandaloneBufferManager()) {
 			@Override
-			protected SSLAwareChannelHandler createChannelPipelineFactory(
-					SSLConfiguration config, StorageManager storageManager) {
-				SSLAwareChannelHandler result = super.createChannelPipelineFactory(config, storageManager);
-				result.setMaxMessageSize(MAX_MESSAGE);
-				return result;
-			}
+			protected SSLAwareChannelHandler createChannelHandler() {
+			    SSLAwareChannelHandler result = new SSLAwareChannelHandler(this) {
+                    public void messageReceived(io.netty.channel.ChannelHandlerContext ctx,
+                            Object msg) throws Exception {
+                        if (delay > 0) {
+                            Thread.sleep(delay);
+                        }
+                        super.messageReceived(ctx, msg);
+                    }
+			    };
+                return result;			    
+		    }
 		};
+		jdbcTransport.setMaxMessageSize(MAX_MESSAGE);
+		jdbcTransport.setMaxLobSize(MAX_LOB);
+
 	}
 	
 	@AfterClass public static void oneTimeTearDown() throws Exception {
@@ -105,10 +131,15 @@ public class TestJDBCSocketTransport {
 	Connection conn;
 	
 	@Before public void setUp() throws Exception {
+		toggleInline(true);
 		Properties p = new Properties();
 		p.setProperty("user", "testuser");
 		p.setProperty("password", "testpassword");
 		conn = TeiidDriver.getInstance().connect("jdbc:teiid:parts@mm://"+addr.getHostName()+":" +jdbcTransport.getPort(), p);
+	}
+
+	private void toggleInline(boolean inline) {
+		((BufferManagerImpl)server.getDqp().getBufferManager()).setInlineLobs(inline);
 	}
 	
 	@After public void tearDown() throws Exception {
@@ -128,10 +159,18 @@ public class TestJDBCSocketTransport {
 		assertTrue(s.execute("select xmlelement(name \"root\") from tables"));
 		s.getResultSet().next();
 		assertEquals("<root></root>", s.getResultSet().getString(1));
+		toggleInline(false);
+		assertTrue(s.execute("select xmlelement(name \"root\") from tables"));
+		s.getResultSet().next();
+		assertEquals("<root></root>", s.getResultSet().getString(1));
 	}
 	
 	@Test public void testLobStreaming1() throws Exception {
 		Statement s = conn.createStatement();
+		assertTrue(s.execute("select cast('' as clob) from tables"));
+		s.getResultSet().next();
+		assertEquals("", s.getResultSet().getString(1));
+		toggleInline(false);
 		assertTrue(s.execute("select cast('' as clob) from tables"));
 		s.getResultSet().next();
 		assertEquals("", s.getResultSet().getString(1));
@@ -182,6 +221,7 @@ public class TestJDBCSocketTransport {
 	
 	@Test public void testGeneratedKeys() throws Exception {
 		Statement s = conn.createStatement();
+		s.execute("set showplan debug");
 		s.execute("create local temporary table x (y serial, z integer, primary key (y))");
 		assertFalse(s.execute("insert into x (z) values (1)", Statement.RETURN_GENERATED_KEYS));
 		ResultSet rs = s.getGeneratedKeys();
@@ -229,8 +269,6 @@ public class TestJDBCSocketTransport {
 		Properties p = new Properties();
 		p.setProperty("user", "testuser");
 		p.setProperty("password", "testpassword");
-		p.setProperty("org.teiid.sockets.soTimeout", "1000");
-		p.setProperty("org.teiid.sockets.SynchronousTtl", "500");
 		ConnectorManagerRepository cmr = server.getConnectorManagerRepository();
 		AutoGenDataService agds = new AutoGenDataService() {
 			@Override
@@ -252,6 +290,7 @@ public class TestJDBCSocketTransport {
 	
 	@Test public void testProtocolException() throws Exception {
 		Statement s = conn.createStatement();
+		s.execute("set showplan debug");
 		try {
 			s.execute("select * from objecttable('teiid_context' columns teiid_row object 'teiid_row') as x");
 			fail();
@@ -306,6 +345,57 @@ public class TestJDBCSocketTransport {
 		ResultSet rs = s.executeQuery("select 1");
 		rs.next();
 		assertEquals(1, rs.getInt(1));
+	}
+	
+	@Test(expected=TeiidSQLException.class) public void testLoginTimeout() throws SQLException {
+		Properties p = new Properties();
+		p.setProperty(TeiidURL.CONNECTION.LOGIN_TIMEOUT, "1");
+		delay = 1500;
+		try {
+			conn = TeiidDriver.getInstance().connect("jdbc:teiid:parts@mm://"+addr.getHostName()+":" +(jdbcTransport.getPort()), p);
+		} finally {
+			delay = 0;
+		}
+	}
+	
+	@Test(expected=TeiidSQLException.class) public void testLargeLob() throws Exception {
+		PreparedStatement s = conn.prepareStatement("select to_bytes(?, 'ascii')");
+		s.setCharacterStream(1, new StringReader(new String(new char[200000])));
+		s.execute();
+	}
+	
+	@Test public void testGeometryStreaming() throws Exception {
+		StringBuilder geomString = new StringBuilder();
+		for (int i = 0; i < 600; i++) {
+			geomString.append("100 100,");
+		}
+		geomString.append("100 100");
+		final GeometryType geo = GeometryUtils.geometryFromClob(new ClobType(new ClobImpl("POLYGON ((" + geomString + "))")));
+		long length = geo.length();
+		PreparedStatement s = conn.prepareStatement("select st_geomfrombinary(?)");
+		s.setBlob(1, new BlobImpl(new InputStreamFactory() {
+			
+			@Override
+			public InputStream getInputStream() throws IOException {
+				try {
+					return geo.getBinaryStream();
+				} catch (SQLException e) {
+					throw new IOException(e);
+				}
+			}
+		}));
+		ResultSet rs = s.executeQuery();
+		rs.next();
+		Blob b = rs.getBlob(1);
+		assertEquals(length, b.length());
+		b.getBytes(1, (int) b.length());
+		
+		toggleInline(false);
+		rs = s.executeQuery();
+		rs.next();
+		b = rs.getBlob(1);
+		assertEquals(length, b.length());
+		b.getBytes(1, (int) b.length());
 	}
 	
 }

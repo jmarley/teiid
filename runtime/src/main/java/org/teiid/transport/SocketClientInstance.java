@@ -36,6 +36,7 @@ import org.teiid.core.crypto.CryptoException;
 import org.teiid.core.crypto.Cryptor;
 import org.teiid.core.crypto.DhKeyGenerator;
 import org.teiid.core.crypto.NullCryptor;
+import org.teiid.core.util.StringUtil;
 import org.teiid.dqp.internal.process.DQPWorkContext;
 import org.teiid.dqp.internal.process.DQPWorkContext.Version;
 import org.teiid.logging.LogConstants;
@@ -96,7 +97,7 @@ public class SocketClientInstance implements ChannelListener, ClientInstance {
 
 	public void exceptionOccurred(Throwable t) {
 		//Object encoding may fail, so send a specific type of message to indicate there was a problem
-		if (objectSocket.isOpen()) {
+		if (objectSocket.isOpen() && !isClosedException(t)) {
 			if (workContext.getClientVersion().compareTo(Version.EIGHT_4) >= 0 && t instanceof FailedWriteException) {
 				FailedWriteException fwe = (FailedWriteException)t;
 				if (fwe.getObject() instanceof Message) {
@@ -106,7 +107,7 @@ public class SocketClientInstance implements ChannelListener, ClientInstance {
 						exception.setContents(m.getMessageKey());
 						exception.setMessageKey(new ExceptionHolder(fwe.getCause()));
 						objectSocket.write(exception);
-						LogManager.log(getLevel(t), LogConstants.CTX_TRANSPORT, t, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40113)); //$NON-NLS-1$
+						LogManager.log(getLevel(t), LogConstants.CTX_TRANSPORT, t, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40113)); 
 						return;
 					}
 				}
@@ -115,7 +116,7 @@ public class SocketClientInstance implements ChannelListener, ClientInstance {
 				Message exception = new Message();
 				exception.setMessageKey(new ExceptionHolder(t));
 				objectSocket.write(exception);
-				LogManager.log(getLevel(t), LogConstants.CTX_TRANSPORT, t, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40113)); //$NON-NLS-1$
+				LogManager.log(getLevel(t), LogConstants.CTX_TRANSPORT, t, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40113)); 
 				return;
 			}
 		}
@@ -131,7 +132,22 @@ public class SocketClientInstance implements ChannelListener, ClientInstance {
 		if (ExceptionUtil.getExceptionOfType(t, ClosedChannelException.class) != null || ExceptionUtil.getExceptionOfType(t, SocketException.class) != null) {
 			return MessageLevel.DETAIL;
 		}
+		if (isClosedException(t)) {
+			return MessageLevel.DETAIL;
+		}
 		return MessageLevel.WARNING;
+	}
+
+	//netty notifies listeners before closing, so we try to detect close rather than writing to an invalid connection
+	private static boolean isClosedException(Throwable t) {
+		if (!(t instanceof IOException)) {
+			return false;
+		}
+		String message = t.getMessage();
+		if ((t.getCause() == null || t.getCause() == t) && message != null && (message.equals("Connection reset by peer") || message.equals("Broken pipe") || StringUtil.indexOfIgnoreCase(message, "closed") >= 0)) { //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+			return true;
+		}
+		return false;
 	}
 
 	public void onConnection() throws CommunicationException {

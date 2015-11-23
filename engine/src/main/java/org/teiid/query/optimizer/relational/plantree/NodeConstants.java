@@ -77,6 +77,8 @@ public final class NodeConstants {
         IS_MULTI_SOURCE,
         SOURCE_NAME,
         CONFORMED_SOURCES, //Set <model id>
+        SUB_PLAN,
+        SUB_PLANS,
         
         // Set operation properties 
         SET_OPERATION,      // SetOperation
@@ -97,11 +99,14 @@ public final class NodeConstants {
         IS_RIGHT_DISTINCT, 	// Boolean
         IS_SEMI_DEP,		// Boolean
         PRESERVE,
+        RIGHT_NESTED_REFERENCES,
+        LEFT_NESTED_REFERENCES,
 
         // Project node properties
         PROJECT_COLS,       // List <SingleElementSymbol>
         INTO_GROUP,         // GroupSymbol
         HAS_WINDOW_FUNCTIONS,		// Boolean
+        CONSTRAINT,
 
         // Select node properties
         SELECT_CRITERIA,    // Criteria
@@ -109,6 +114,7 @@ public final class NodeConstants {
         //phantom nodes represent the previous position of criteria that has been pushed across a source, group, or union node.
         //phantom nodes are used by RuleCopyCriteria and removed by RuleCleanCriteria.
         IS_PHANTOM,         // Boolean
+        IS_TEMPORARY,         // Boolean
         IS_COPIED,           // Boolean - used in CopyCriteria to mark which selects have already been copied
         IS_PUSHED,           // true if this node has already been pushed
         IS_DEPENDENT_SET, // Boolean - only used with dependent joins
@@ -131,6 +137,7 @@ public final class NodeConstants {
         INLINE_VIEW,        // If the source node represents an inline view
         NO_UNNEST,
         MAKE_IND,
+        SOURCE_HINT,
         
         // Group node properties
         GROUP_COLS,         // List <Expression>
@@ -159,9 +166,5 @@ public final class NodeConstants {
         ACCESS_PATTERN_USED, // List <Object element ID>
         REQUIRED_ACCESS_PATTERN_GROUPS, 
         
-        CONSTRAINT,
-        SOURCE_HINT,
-        SUB_PLAN,
-        SUB_PLANS,
     }
 }

@@ -25,7 +25,11 @@ import java.io.Serializable;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Map;
+import java.util.StringTokenizer;
+import java.util.TreeMap;
 
 import org.teiid.adminapi.Translator;
 import org.teiid.adminapi.impl.VDBTranslatorMetaData;
@@ -115,8 +119,16 @@ public class TranslatorUtil {
 				 throw new TeiidException(RuntimePlugin.Event.TEIID40024, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40024, executionClass));
 			}
 			executionFactory = (ExecutionFactory)o;
-			injectProperties(executionFactory, data);
-			executionFactory.start();
+			synchronized (executionFactory) {
+				injectProperties(executionFactory, data);
+				ClassLoader orginalCL = Thread.currentThread().getContextClassLoader();
+				try {
+				    Thread.currentThread().setContextClassLoader(executionFactory.getClass().getClassLoader());
+				    executionFactory.start();
+				} finally {
+				    Thread.currentThread().setContextClassLoader(orginalCL);
+				}
+			}
 			return executionFactory;
 		} catch (InvocationTargetException e) {
 			throw new TeiidException(RuntimePlugin.Event.TEIID40025, e);
@@ -225,6 +237,10 @@ public class TranslatorUtil {
 		}
 		
 		VDBTranslatorMetaData metadata = new VDBTranslatorMetaData();
+		String see = translator.deprecated();
+		if (see != null && see.length() > 0) {
+			metadata.addProperty("deprecated", see); //$NON-NLS-1$ 
+		}
 		metadata.setName(translator.name());
 		metadata.setDescription(translator.description());
 		metadata.setExecutionFactoryClass(factory.getClass());
@@ -315,15 +331,18 @@ public class TranslatorUtil {
             Class clazz) {
         Map<Method, TranslatorProperty> tps = TranslatorUtil.getTranslatorProperties(clazz);
         for (Method m:tps.keySet()) {
+            
         	Object defaultValue = getDefaultValue(instance, m, tps.get(m));
-        	if (defaultValue != null) {
-        		metadata.addProperty(getPropertyName(m), defaultValue.toString());
-        	}
         	
         	TranslatorProperty tp = tps.get(m);
+        	boolean importProperty = tp.category()==TranslatorProperty.PropertyType.IMPORT;
+            if (defaultValue != null && !importProperty) {
+                metadata.addProperty(getPropertyName(m), defaultValue.toString());
+            }
+        	
         	ExtendedPropertyMetadata epm = new ExtendedPropertyMetadata();
         	epm.category = tp.category().name();
-        	epm.name = tp.category()==TranslatorProperty.PropertyType.IMPORT?"importer."+getPropertyName(m):getPropertyName(m); //$NON-NLS-1$
+        	epm.name = importProperty?"importer."+getPropertyName(m):getPropertyName(m); //$NON-NLS-1$
         	epm.description = tp.description();
         	epm.advanced = tp.advanced();
         	if (defaultValue != null) {

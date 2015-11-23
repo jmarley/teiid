@@ -23,14 +23,22 @@ package org.teiid.translator.mongodb;
 
 import static org.junit.Assert.assertEquals;
 
+import java.util.Arrays;
+
 import org.junit.Before;
 import org.junit.Test;
 import org.teiid.cdk.api.TranslationUtility;
 import org.teiid.core.util.ObjectConverterUtil;
 import org.teiid.core.util.UnitTestUtil;
 import org.teiid.language.Select;
+import org.teiid.metadata.MetadataFactory;
+import org.teiid.query.function.FunctionTree;
+import org.teiid.query.function.UDFSource;
+import org.teiid.query.metadata.MetadataValidator;
 import org.teiid.query.metadata.TransformationMetadata;
+import org.teiid.query.parser.TestDDLParser;
 import org.teiid.query.unittest.RealMetadataFactory;
+import org.teiid.query.validator.ValidatorReport;
 
 import com.mongodb.BasicDBObject;
 
@@ -44,15 +52,20 @@ public class TestMongoDBSelectVisitor {
     	this.translator = new MongoDBExecutionFactory();
     	this.translator.start();
 
-    	TransformationMetadata metadata = RealMetadataFactory.fromDDL(ObjectConverterUtil.convertFileToString(UnitTestUtil.getTestDataFile("northwind.ddl")), "sakila", "northwind");
-    	this.utility = new TranslationUtility(metadata);
+    	MetadataFactory mf = TestDDLParser.helpParse(ObjectConverterUtil.convertFileToString(UnitTestUtil.getTestDataFile("northwind.ddl")), "northwind");
 
+    	TransformationMetadata metadata = RealMetadataFactory.createTransformationMetadata(mf.asMetadataStore(), "sakila", new FunctionTree("mongo", new UDFSource(translator.getPushDownFunctions())));
+    	ValidatorReport report = new MetadataValidator().validate(metadata.getVdbMetaData(), metadata.getMetadataStore());
+    	if (report.hasItems()) {
+    		throw new RuntimeException(report.getFailureMessage());
+    	}
+    	this.utility = new TranslationUtility(metadata);
     }
 
     private void helpExecute(String query, String collection, String project, String match) throws Exception {
     	helpExecute(query, collection, project, match, null, null);
     }
-    private void helpExecute(String query, String collection, String project, String match, String groupby, String having) throws Exception {
+    private MongoDBSelectVisitor helpExecute(String query, String collection, String project, String match, String groupby, String having) throws Exception {
     	Select cmd = (Select)this.utility.parseCommand(query);
     	MongoDBSelectVisitor visitor = new MongoDBSelectVisitor(this.translator, this.utility.createRuntimeMetadata());
     	visitor.visitNode(cmd);
@@ -76,6 +89,7 @@ public class TestMongoDBSelectVisitor {
     	if (having != null) {
     		assertEquals("having wrong", having, visitor.having.toString());
     	}
+    	return visitor;
     }
 
     @Test
@@ -200,7 +214,7 @@ public class TestMongoDBSelectVisitor {
 				"SELECT user_id, age, status FROM users WHERE user_id like '%bc%'",
 				"users",
 				"{ \"_m0\" : \"$user_id\" , \"_m1\" : \"$age\" , \"_m2\" : \"$status\"}",
-				"{ \"user_id.$id\" : { \"$regex\" : \"bc\"}}");
+				"{ \"user_id\" : { \"$regex\" : \"bc\"}}");
     }
 
     @Test
@@ -209,7 +223,7 @@ public class TestMongoDBSelectVisitor {
 				"SELECT user_id, age, status FROM users WHERE user_id like 'bc%'",
 				"users",
 				"{ \"_m0\" : \"$user_id\" , \"_m1\" : \"$age\" , \"_m2\" : \"$status\"}",
-				"{ \"user_id.$id\" : { \"$regex\" : \"^bc\"}}");
+				"{ \"user_id\" : { \"$regex\" : \"^bc\"}}");
     }
 
     @Test
@@ -218,7 +232,7 @@ public class TestMongoDBSelectVisitor {
 				"SELECT user_id, age, status FROM users WHERE user_id like 'b%c'",
 				"users",
 				"{ \"_m0\" : \"$user_id\" , \"_m1\" : \"$age\" , \"_m2\" : \"$status\"}",
-				"{ \"user_id.$id\" : { \"$regex\" : \"^b.*c$\"}}");
+				"{ \"user_id\" : { \"$regex\" : \"^b.*c$\"}}");
     }
 
     @Test
@@ -227,7 +241,7 @@ public class TestMongoDBSelectVisitor {
 				"SELECT user_id, age, status FROM users WHERE user_id NOT LIKE 'b%c'",
 				"users",
 				"{ \"_m0\" : \"$user_id\" , \"_m1\" : \"$age\" , \"_m2\" : \"$status\"}",
-				"{ \"user_id.$id\" : { \"$not\" : { \"$regex\" : \"^b.*c$\"}}}");
+				"{ \"user_id\" : { \"$not\" : { \"$regex\" : \"^b.*c$\"}}}");
     }
 
     @Test
@@ -285,14 +299,29 @@ public class TestMongoDBSelectVisitor {
     public void testDistinctEquivalent() throws Exception {
     	String query = "SELECT user_id, age age FROM users group by user_id, age";
 
-		helpExecute(
+    	MongoDBSelectVisitor visitor = helpExecute(
 				query,
 				"users",
 				"{ \"_m0\" : \"$_id._c0\" , \"age\" : \"$_id._c1\"}",
 				null,
 				"{ \"_id\" : { \"_c0\" : \"$user_id\" , \"_c1\" : \"$age\"}}",
 				null);
+    	assertEquals(Arrays.asList("_m0", "age"), visitor.selectColumnReferences);
     }
+    
+    @Test
+    public void testAggregateWithGroupBy() throws Exception {
+        String query = "SELECT user_id, sum(age) FROM users group by user_id";
+
+        MongoDBSelectVisitor visitor = helpExecute(
+                query,
+                "users",
+                "{ \"_m0\" : \"$_id._c0\" , \"_m1\" : 1}",
+                null,
+                "{ \"_id\" : { \"_c0\" : \"$user_id\"} , \"_m1\" : { \"$sum\" : \"$age\"}}",
+                null);
+        assertEquals(Arrays.asList("_m0", "_m1"), visitor.selectColumnReferences);
+    }    
 
     @Test
     public void testSum() throws Exception {
@@ -348,7 +377,7 @@ public class TestMongoDBSelectVisitor {
     public void testSelectBooleanExpression3() throws Exception {
     	String query = "SELECT (user_id = 'USER' OR user_id = 'user') as X1 FROM users";
 		helpExecute(query, "users",
-				"{ \"X1\" : { \"$cond\" : [ { \"_m0\" : { \"$in\" : [ \"user\" , \"USER\"]}} , true , false]}}",
+				"{ \"X1\" : { \"$cond\" : [ { \"user_id\" : { \"$in\" : [ \"user\" , \"USER\"]}} , true , false]}}",
 				null);
     }    
     
@@ -373,7 +402,7 @@ public class TestMongoDBSelectVisitor {
     	String query = "SELECT age FROM users WHERE user_id = 'bob'";
 		helpExecute(query, "users",
 				"{ \"_m0\" : \"$age\"}",
-				"{ \"user_id.$id\" : \"bob\"}");
+				"{ \"user_id\" : \"bob\"}");
     }
 
     @Test
@@ -389,6 +418,40 @@ public class TestMongoDBSelectVisitor {
     	String query = "SELECT * from G2 where e2 = 50";
 		helpExecute(query, "G2",
 				"{ \"_m0\" : \"$e1\" , \"_m1\" : \"$e2\" , \"_m2\" : \"$e3\"}",
-				"{ \"e2.$id.e2\" : 50}");
+				"{ \"e2\" : 50}");
     }
+    
+    @Test
+    public void testGeoWithinPloygonFunction() throws Exception {
+    	String query = "SELECT mongo.geoWithin(user_id, 'LineString', ((cast(1.0 as double), cast(2.0 as double)), (cast(1.0 as double), cast(2.0 as double)))) FROM users";
+		helpExecute(query, "users",
+				"{ \"_m0\" : { \"user_id\" : { \"$geoWithin\" : { \"$geometry\" : { \"type\" : \"LineString\" , \"coordinates\" : [ [ [ 1.0 , 2.0] , [ 1.0 , 2.0]]]}}}}}",
+				null);
+    }
+    
+    @Test
+    public void testGeoNearFunction() throws Exception {
+    	String query = "SELECT mongo.geonear(user_id, (cast(1.0 as double), cast(2.0 as double)), 22, 10) FROM users";
+		helpExecute(query, "users",
+				"{ \"_m0\" : { \"user_id\" : { \"$near\" : { \"$geometry\" : { \"type\" : \"Point\" , \"coordinates\" : [ [ 1.0 , 2.0]]} , \"$maxDistance\" : 22 , \"$minDistance\" : 10}}}}",
+				null);
+    }   
+    
+    @Test
+    public void testGeoWithinPloygonFunctionInWhere() throws Exception {
+    	String query = "SELECT user_id FROM users where mongo.geoWithin(user_id, 'LineString', ((cast(1.0 as double), cast(2.0 as double)), (cast(1.0 as double), cast(2.0 as double))))";
+		helpExecute(query, "users",
+				"{ \"_m1\" : \"$user_id\"}",
+				"{ \"user_id\" : { \"$geoWithin\" : { \"$geometry\" : { \"type\" : \"LineString\" , \"coordinates\" : [ [ [ 1.0 , 2.0] , [ 1.0 , 2.0]]]}}}}"				
+				);
+    }    
+    
+    @Test
+    public void testAliasPloygonFunctionInWhere() throws Exception {
+    	String query = "SELECT user_id FROM users where mongo.geoPolygonWithin(user_id, 1.0, 2.0, 3.0, 4.0)";
+		helpExecute(query, "users",
+				"{ \"_m1\" : \"$user_id\"}",
+				"{ \"user_id\" : { \"$geoWithin\" : { \"$geometry\" : { \"type\" : \"Polygon\" , \"coordinates\" : [ [ [ 3.0 , 1.0] , [ 2.0 , 1.0] , [ 2.0 , 4.0] , [ 3.0 , 4.0] , [ 3.0 , 1.0]]]}}}}"				
+				);
+    }     
 }

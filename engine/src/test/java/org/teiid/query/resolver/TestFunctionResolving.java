@@ -22,13 +22,16 @@
 
 package org.teiid.query.resolver;
 
+import java.sql.Clob;
 import static org.junit.Assert.*;
 
 import org.junit.Test;
 import org.teiid.api.exception.query.QueryParserException;
 import org.teiid.api.exception.query.QueryResolverException;
 import org.teiid.core.TeiidComponentException;
+import org.teiid.core.types.ClobType;
 import org.teiid.core.types.DataTypeManager;
+import org.teiid.core.types.XMLType;
 import org.teiid.query.eval.Evaluator;
 import org.teiid.query.metadata.QueryMetadataInterface;
 import org.teiid.query.metadata.TransformationMetadata;
@@ -135,9 +138,33 @@ public class TestFunctionResolving {
 	public static Expression getExpression(String sql) throws QueryParserException,
 			TeiidComponentException, QueryResolverException {
 		Expression func = QueryParser.getQueryParser().parseExpression(sql);
-		ResolverVisitor.resolveLanguageObject(func, RealMetadataFactory.example1Cached());
+		TransformationMetadata tm = RealMetadataFactory.example1Cached();
+		ResolverVisitor.resolveLanguageObject(func, tm);
 		return func;
 	}
+
+    /**
+     * Helper to verify the result of an expression.
+     *
+     * @param expr SQL expression.
+     * @param result Expected result.
+     * @throws Exception
+     */
+    public static void assertEval(String expr, String result)
+            throws Exception {
+        Expression ex = TestFunctionResolving.getExpression(expr);
+        Object val = Evaluator.evaluate(ex);
+        String valStr;
+        if (val instanceof Clob) {
+            valStr = ClobType.getString((Clob) val);
+        } else if (val instanceof XMLType) {
+            valStr = ((XMLType) val).getString();
+        } else {
+            valStr = val.toString();
+        }
+        assertEquals(result, valStr);
+    }
+
 	
 	/**
 	 * e1 is of type string, so 1 should be converted to string
@@ -225,7 +252,41 @@ public class TestFunctionResolving {
 
     	func = (Function) QueryParser.getQueryParser().parseExpression(sql);
 		ResolverVisitor.resolveLanguageObject(func, tm);
-		System.out.println(func.getType());
 	}    
+	
+	@Test public void testImportedPushdown() throws Exception {     
+		RealMetadataFactory.example1Cached();
+        QueryMetadataInterface tm = RealMetadataFactory.fromDDL("x", new DDLHolder("y", "create foreign function func(x object) returns object;"), new DDLHolder("z", "create foreign function func(x object) returns object;"));
+
+    	String sql = "func('a')";
+
+    	Function func = (Function) QueryParser.getQueryParser().parseExpression(sql);
+    	try {
+    		ResolverVisitor.resolveLanguageObject(func, tm);
+    		fail("should be ambiguous");
+    	} catch (QueryResolverException e) {
+    		
+    	}
+    	
+    	tm = RealMetadataFactory.fromDDL("x", new DDLHolder("y", "create foreign function func(x object) returns object options (\"teiid_rel:system-name\" 'f');"), new DDLHolder("z", "create foreign function func(x object) returns object options (\"teiid_rel:system-name\" 'f');"));
+
+    	func = (Function) QueryParser.getQueryParser().parseExpression(sql);
+		ResolverVisitor.resolveLanguageObject(func, tm);
+		
+    	tm = RealMetadataFactory.fromDDL("x", new DDLHolder("y", "create foreign function func() returns object options (\"teiid_rel:system-name\" 'f');"), new DDLHolder("z", "create foreign function func() returns object options (\"teiid_rel:system-name\" 'f');"));
+
+    	func = (Function) QueryParser.getQueryParser().parseExpression("func()");
+		ResolverVisitor.resolveLanguageObject(func, tm);
+	}
+	
+	/**
+	 * e1 is of type string, so 1 should be converted to string
+	 * @throws Exception
+	 */
+    @Test public void testNumericConversion() throws Exception {
+    	String sql = "1.0/2"; //$NON-NLS-1$
+    	Function f = (Function)getExpression(sql);
+    	assertEquals(DataTypeManager.DefaultDataClasses.BIG_DECIMAL, f.getType());
+    }
     
 }

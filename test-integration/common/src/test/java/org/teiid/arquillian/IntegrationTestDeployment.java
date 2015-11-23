@@ -46,6 +46,7 @@ import org.jboss.shrinkwrap.api.exporter.ZipExporter;
 import org.jboss.shrinkwrap.api.spec.JavaArchive;
 import org.junit.After;
 import org.junit.Before;
+import org.junit.Ignore;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.postgresql.Driver;
@@ -54,6 +55,7 @@ import org.teiid.adminapi.Admin.TranlatorPropertyType;
 import org.teiid.adminapi.VDB.ConnectionType;
 import org.teiid.adminapi.VDB.Status;
 import org.teiid.adminapi.impl.VDBTranslatorMetaData;
+import org.teiid.adminapi.jboss.AdminFactory;
 import org.teiid.core.util.UnitTestUtil;
 import org.teiid.jdbc.TeiidDriver;
 
@@ -65,7 +67,8 @@ public class IntegrationTestDeployment {
 	
 	@Before
 	public void setup() throws Exception {
-		admin = AdminFactory.getInstance().createAdmin("localhost", 9999,	"admin", "admin".toCharArray());
+        admin = AdminFactory.getInstance().createAdmin("localhost",
+                AdminUtil.MANAGEMENT_PORT, "admin", "admin".toCharArray());
 	}
 	
 	@After
@@ -186,7 +189,7 @@ public class IntegrationTestDeployment {
 	@Test
 	public void testTraslators() throws Exception {
 		Collection<? extends Translator> translators = admin.getTranslators();
-		assertEquals(translators.toString(), 42, translators.size());
+		assertEquals(translators.toString(), 53, translators.size());
 
 		JavaArchive jar = getLoopyArchive();
 		
@@ -208,7 +211,7 @@ public class IntegrationTestDeployment {
     @Test
     public void testTraslatorProperties() throws Exception {
         Collection<? extends PropertyDefinition> props = admin.getTranslatorPropertyDefinitions("accumulo", TranlatorPropertyType.OVERRIDE);
-        assertEquals(18, props.size());
+        assertEquals(19, props.size());
         
         props = admin.getTranslatorPropertyDefinitions("accumulo", TranlatorPropertyType.EXTENSION_METADATA);
         assertEquals(3, props.size());
@@ -239,7 +242,9 @@ public class IntegrationTestDeployment {
 
 	@Test
 	public void testVDBConnectionType() throws Exception {
-		admin.deploy("bqt.vdb", new FileInputStream(UnitTestUtil.getTestDataFile("bqt.vdb")));			
+		admin.deploy("bqt.vdb", new FileInputStream(UnitTestUtil.getTestDataFile("bqt.vdb")));	
+		
+		AdminUtil.waitForVDBLoad(admin, "bqt2", 1, 3);	
 		
 		VDB vdb = admin.getVDB("bqt", 1);
 		Model model = vdb.getModels().get(0);
@@ -268,6 +273,8 @@ public class IntegrationTestDeployment {
 		}
 
 		admin.deploy("bqt2.vdb", new FileInputStream(UnitTestUtil.getTestDataFile("bqt2.vdb")));
+		AdminUtil.waitForVDBLoad(admin, "bqt2", 1, 3);	
+
 		admin.updateSource("bqt", 2, "Source", "h2", "java:jboss/datasources/ExampleDS");
 		
 		conn = TeiidDriver.getInstance().connect("jdbc:teiid:bqt@mm://localhost:31000;user=user;password=user", null);
@@ -317,6 +324,7 @@ public class IntegrationTestDeployment {
 		s = sessions.iterator().next();
 
 		admin.terminateSession(s.getSessionId());
+		Thread.sleep(2000);
 		sessions = admin.getSessions();
 		assertEquals (0, sessions.size());			
 		conn.close();
@@ -388,7 +396,7 @@ public class IntegrationTestDeployment {
 	@Test
 	public void getDatasourceTemplateNames() throws Exception {
 		Set<String> vals  = new HashSet<String>(Arrays.asList(new String[]{"teiid-local", "google", "teiid", "ldap", 
-				"accumulo", "infinispan", "file", "cassandra", "salesforce", "mongodb", "solr", "webservice", "simpledb", "h2"}));
+				"accumulo", "file", "cassandra", "salesforce", "salesforce-34", "mongodb", "solr", "webservice", "simpledb", "h2"}));
 		deployVdb();
 		Set<String> templates = admin.getDataSourceTemplateNames();
 		assertEquals(vals, templates);
@@ -462,7 +470,8 @@ public class IntegrationTestDeployment {
 	@Test
 	public void testDataRoleMapping() throws Exception{
 		admin.deploy("bqt2.vdb", new FileInputStream(UnitTestUtil.getTestDataFile("bqt2.vdb")));			
-		
+		AdminUtil.waitForVDBLoad(admin, "bqt2", 1, 3);
+
 		VDB vdb = admin.getVDB("bqt", 2);
 		Model model = vdb.getModels().get(0);
 		admin.assignToModel("bqt", 2, model.getName(), "Source", "h2", "java:jboss/datasources/ExampleDS");
@@ -509,6 +518,7 @@ public class IntegrationTestDeployment {
 	}
 	
 	@Test
+	@Ignore
 	public void testCreateConnectionFactory() throws Exception{
 		String deployedName = "wsOne";
 		
@@ -679,5 +689,27 @@ public class IntegrationTestDeployment {
 		
 		admin.undeploy("loopy.jar");
 		admin.undeploy("test-vdb.xml");
+	}
+	
+	@Test
+	public void testGeometry() throws Exception {
+		admin.deploy("bqt.vdb", new FileInputStream(UnitTestUtil.getTestDataFile("bqt.vdb")));	
+		
+		AdminUtil.waitForVDBLoad(admin, "bqt", 1, 3);	
+		
+		Connection conn = TeiidDriver.getInstance().connect("jdbc:teiid:bqt@mm://localhost:31000;user=user;password=user", null);
+		
+		Statement s = conn.createStatement();
+		//test each functional area - jts, proj4j, and geojson
+		s.executeQuery("select st_geomfromtext('POINT(0 0)')");
+		s.executeQuery("select ST_AsText(ST_Transform(ST_GeomFromText('POLYGON((743238 2967416,743238 2967450,743265 2967450,743265.625 2967416,743238 2967416))',2249),4326))");
+		s.executeQuery("select ST_AsGeoJson(ST_GeomFromText('POINT (-48.23456 20.12345)'))");
+		s.executeQuery("select ST_AsText(ST_GeomFromGeoJSON('{\"coordinates\":[-48.23456,20.12345],\"type\":\"Point\"}'))");
+	}
+	
+	@Test(expected=AdminProcessingException.class) public void testAmbigiousDeployment() throws Exception {
+		admin.deploy("bqt2.vdb", new FileInputStream(UnitTestUtil.getTestDataFile("bqt2.vdb")));			
+		AdminUtil.waitForVDBLoad(admin, "bqt2", 1, 3);
+		admin.deploy("bqt2-1.vdb", new FileInputStream(UnitTestUtil.getTestDataFile("bqt2.vdb")));			
 	}
 }

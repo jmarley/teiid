@@ -22,8 +22,20 @@
 
 package org.teiid.translator.jdbc;
 
-import java.sql.*;
-import java.util.*;
+import java.sql.Connection;
+import java.sql.DatabaseMetaData;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Types;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.TreeMap;
 import java.util.regex.Pattern;
 
 import org.teiid.core.util.StringUtil;
@@ -52,6 +64,7 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 		private String schema;
 		private String name;
 		private Table table;
+		private String type;
 		
 		public TableInfo(String catalog, String schema, String name, Table table) {
 			this.catalog = catalog;
@@ -76,6 +89,7 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 	private boolean quoteNameInSource = true;
 	private boolean useProcedureSpecificName;
 	private boolean useCatalogName = true;
+	private String catalogSeparator = String.valueOf(AbstractMetadataRecord.NAME_DELIM_CHAR);
 	private boolean autoCreateUniqueConstraints = true;
 	private boolean useQualifiedName = true;
 	
@@ -105,7 +119,13 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 			throws SQLException {
 		DatabaseMetaData metadata = conn.getMetaData();
 		
-		quoteString = metadata.getIdentifierQuoteString();
+		if (this.quoteString == null) {
+			try {
+				quoteString = metadata.getIdentifierQuoteString();
+			} catch (SQLException e) {
+				LogManager.logDetail(LogConstants.CTX_CONNECTOR, e, "Assuming identifier quoting not supported"); //$NON-NLS-1$
+			}
+		}
 		if (quoteString != null && quoteString.trim().length() == 0) {
 			quoteString = null;
 		}
@@ -128,7 +148,14 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 			}
 		}
 		
-		Map<String, TableInfo> tableMap = getTables(metadataFactory, metadata);
+		if (useCatalogName) {
+			String separator = metadata.getCatalogSeparator();
+			if (separator != null && !separator.isEmpty()) {
+				this.catalogSeparator = separator;
+			}
+		}
+		
+		Map<String, TableInfo> tableMap = getTables(metadataFactory, metadata, conn);
 		HashSet<TableInfo> tables = new LinkedHashSet<TableInfo>(tableMap.values());
 		if (importKeys) {
 			getPrimaryKeys(metadataFactory, metadata, tables);
@@ -201,7 +228,8 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 				}
 				BaseColumn record = null;
 				int precision = columns.getInt(8);
-				String runtimeType = getRuntimeType(sqlType, typeName, precision);
+				int scale = columns.getInt(10);
+				String runtimeType = getRuntimeType(sqlType, typeName, precision, scale);
 				switch (columnType) {
 				case DatabaseMetaData.procedureColumnResult:
 					record = metadataFactory.addProcedureResultSetColumn(columnName, runtimeType, procedure);
@@ -222,9 +250,9 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 					continue; //shouldn't happen
 				}
 				record.setNativeType(typeName);
-				record.setPrecision(columns.getInt(8));
+				record.setPrecision(precision);
 				record.setLength(columns.getInt(9));
-				record.setScale(columns.getInt(10));
+				record.setScale(scale);
 				record.setRadix(columns.getInt(11));
 				record.setNullType(NullType.values()[columns.getInt(12)]);
 				record.setAnnotation(columns.getString(13));
@@ -251,7 +279,7 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 	}
 	
 	private Map<String, TableInfo> getTables(MetadataFactory metadataFactory,
-			DatabaseMetaData metadata) throws SQLException {
+			DatabaseMetaData metadata, Connection conn) throws SQLException {
 		LogManager.logDetail(LogConstants.CTX_CONNECTOR, "JDBCMetadataProcessor - Importing tables"); //$NON-NLS-1$
 		ResultSet tables = metadata.getTables(catalog, schemaPattern, tableNamePattern, tableTypes);
 		Map<String, TableInfo> tableMap = new HashMap<String, TableInfo>();
@@ -271,12 +299,13 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 				continue;
 			}
 			TableInfo ti = new TableInfo(tableCatalog, tableSchema, tableName, table);
+			ti.type = tables.getString(4);
 			tableMap.put(fullName, ti);
 			tableMap.put(tableName, ti);
 		}
 		tables.close();
 		
-		getColumns(metadataFactory, metadata, tableMap);
+		getColumns(metadataFactory, metadata, tableMap, conn);
 		return tableMap;
 	}
 	
@@ -316,7 +345,7 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 	}
 
 	private void getColumns(MetadataFactory metadataFactory,
-			DatabaseMetaData metadata, Map<String, TableInfo> tableMap)
+			DatabaseMetaData metadata, Map<String, TableInfo> tableMap, Connection conn)
 			throws SQLException {
 		LogManager.logDetail(LogConstants.CTX_CONNECTOR, "JDBCMetadataProcessor - Importing columns"); //$NON-NLS-1$
 		boolean singleSchema = schemaPattern != null && !schemaPattern.contains("_") && !schemaPattern.contains("%"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -325,17 +354,17 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 					(excludeTables == null //getting all from a single schema 
 					|| tableMap.size()/2 > Math.sqrt(tableMap.size()/2 + excludedTables)))) {  //not excluding enough from a single schema
 			ResultSet columns = metadata.getColumns(catalog, schemaPattern, tableNamePattern, columnNamePattern);
-			processColumns(metadataFactory, tableMap, columns);
+			processColumns(metadataFactory, tableMap, columns, conn);
 		} else {
 			for (TableInfo ti : new LinkedHashSet<TableInfo>(tableMap.values())) {
 				ResultSet columns = metadata.getColumns(ti.catalog, ti.schema, ti.name, columnNamePattern);
-				processColumns(metadataFactory, tableMap, columns);
+				processColumns(metadataFactory, tableMap, columns, conn);
 			}
 		}
 	}
 
 	private void processColumns(MetadataFactory metadataFactory,
-			Map<String, TableInfo> tableMap, ResultSet columns)
+			Map<String, TableInfo> tableMap, ResultSet columns, Connection conn)
 			throws SQLException {
 		int rsColumns = columns.getMetaData().getColumnCount();
 		while (columns.next()) {
@@ -350,9 +379,26 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 					continue;
 				}
 			}
-			addColumn(columns, tableInfo.table, metadataFactory, rsColumns);
+			Column c = addColumn(columns, tableInfo.table, metadataFactory, rsColumns);
+			if (TypeFacility.RUNTIME_TYPES.GEOMETRY.equals(c.getJavaType())) {
+				String columnName = columns.getString(4);
+				getGeometryMetadata(c, conn, tableCatalog, tableSchema, tableName, columnName);
+			}
 		}
 		columns.close();
+	}
+	
+	/**
+	 * 
+	 * @param c
+	 * @param conn
+	 * @param tableCatalog
+	 * @param tableSchema
+	 * @param tableName
+	 * @param columnName 
+	 */
+	protected void getGeometryMetadata(Column c, Connection conn, String tableCatalog, String tableSchema, String tableName, String columnName) {
+		
 	}
 	
 	/**
@@ -369,11 +415,13 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 		int type = columns.getInt(5);
 		String typeName = columns.getString(6);
 		int columnSize = columns.getInt(7);
-		String runtimeType = getRuntimeType(type, typeName, columnSize);
+		int scale = columns.getInt(9);
+		String runtimeType = getRuntimeType(type, typeName, columnSize, scale);
 		//note that the resultset is already ordered by position, so we can rely on just adding columns in order
 		Column column = metadataFactory.addColumn(columnName, runtimeType, table);
 		column.setNameInSource(quoteName(columnName));
 		column.setPrecision(columnSize);
+		column.setScale(scale); //assume that null means 0
 		column.setLength(columnSize);
 		column.setNativeType(typeName);
 		column.setRadix(columns.getInt(10));
@@ -406,6 +454,10 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 			column.setAutoIncremented("YES".equalsIgnoreCase(columns.getString(23))); //$NON-NLS-1$
 		}
 		return column;
+	}
+	
+	protected String getRuntimeType(int type, String typeName, int precision, int scale) {
+		return getRuntimeType(type, typeName, precision);
 	}
 
 	protected String getRuntimeType(int type, String typeName, int precision) {
@@ -452,57 +504,68 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 		}
 	}
 	
+	private class FKInfo {
+		TableInfo pkTable;
+		TreeMap<Short, String> keyColumns = new TreeMap<Short, String>();
+		TreeMap<Short, String> referencedKeyColumns = new TreeMap<Short, String>();
+		boolean valid = true;
+	}
+	
 	private void getForeignKeys(MetadataFactory metadataFactory,
 			DatabaseMetaData metadata, Collection<TableInfo> tables, Map<String, TableInfo> tableMap) throws SQLException {
 		LogManager.logDetail(LogConstants.CTX_CONNECTOR, "JDBCMetadataProcessor - Importing foreign keys"); //$NON-NLS-1$
 		for (TableInfo tableInfo : tables) {
 			ResultSet fks = metadata.getImportedKeys(tableInfo.catalog, tableInfo.schema, tableInfo.name);
-			TreeMap<Short, String> keyColumns = null;
-			TreeMap<Short, String> referencedKeyColumns = null;
-			String fkName = null;
-			TableInfo pkTable = null;
-			short savedSeqNum = Short.MAX_VALUE;
+			HashMap<String, FKInfo> allKeys = new HashMap<String, FKInfo>();
 			while (fks.next()) {
 				String columnName = fks.getString(8);
 				short seqNum = fks.getShort(9);
 				String pkColumnName = fks.getString(4);
 				
-				if (seqNum <= savedSeqNum) {
-					if (keyColumns != null) {
-						KeyRecord record = autoCreateUniqueKeys(autoCreateUniqueConstraints, metadataFactory, fkName, referencedKeyColumns, pkTable.table);						
-						ForeignKey fk = metadataFactory.addForiegnKey(fkName, new ArrayList<String>(keyColumns.values()), new ArrayList<String>(referencedKeyColumns.values()), pkTable.table.getName(), tableInfo.table);
-						if (record != null) {
-							fk.setPrimaryKey(record);
-						}
-					}
-					keyColumns = new TreeMap<Short, String>();
-					referencedKeyColumns = new TreeMap<Short, String>();
-					fkName = null;
-				}
-				savedSeqNum = seqNum;
-				keyColumns.put(seqNum, columnName);
-				referencedKeyColumns.put(seqNum, pkColumnName);
+				String fkName = fks.getString(12);
 				if (fkName == null) {
+					fkName = "FK_" + tableInfo.table.getName().toUpperCase(); //$NON-NLS-1$
+				}
+				
+				FKInfo fkInfo = allKeys.get(fkName);
+				
+				if (fkInfo == null) {
+					fkInfo = new FKInfo();
+					allKeys.put(fkName, fkInfo);
+
 					String tableCatalog = fks.getString(1);
 					String tableSchema = fks.getString(2);
 					String tableName = fks.getString(3);
 					String fullTableName = getFullyQualifiedName(tableCatalog, tableSchema, tableName);
-					pkTable = tableMap.get(fullTableName);
-					if (pkTable == null) {
+					fkInfo.pkTable = tableMap.get(fullTableName);
+					if (fkInfo.pkTable == null) {
 						//throw new TranslatorException(JDBCPlugin.Util.getString("JDBCMetadataProcessor.cannot_find_primary", fullTableName)); //$NON-NLS-1$
-						continue; //just drop the foreign key, the user probably didn't import the other table
+						fkInfo.valid = false;
+						continue;
 					}
-					fkName = fks.getString(12);
-					if (fkName == null) {
-						fkName = "FK_" + tableInfo.table.getName().toUpperCase(); //$NON-NLS-1$
-					}
-				} 
+				}
+				
+				if (!fkInfo.valid) {
+					continue;
+				}
+				
+				if (fkInfo.keyColumns.put(seqNum, columnName) != null) {
+					//We can't gracefully handle two unnamed fks
+					fkInfo.valid = false;
+				}
+				fkInfo.referencedKeyColumns.put(seqNum, pkColumnName);
 			}
-			if (keyColumns != null) {
-				KeyRecord record = autoCreateUniqueKeys(autoCreateUniqueConstraints, metadataFactory, fkName, referencedKeyColumns, pkTable.table);
-				ForeignKey fk = metadataFactory.addForiegnKey(fkName, new ArrayList<String>(keyColumns.values()), new ArrayList<String>(referencedKeyColumns.values()), pkTable.table.getName(), tableInfo.table);
+			
+			for (Map.Entry<String, FKInfo> entry : allKeys.entrySet()) {
+				FKInfo info = entry.getValue();
+				if (!info.valid) {
+					continue;
+				}
+				
+				KeyRecord record = autoCreateUniqueKeys(autoCreateUniqueConstraints, metadataFactory, entry.getKey(), info.referencedKeyColumns, info.pkTable.table);
+				ForeignKey fk = metadataFactory.addForiegnKey(entry.getKey(), new ArrayList<String>(info.keyColumns.values()), new ArrayList<String>(info.referencedKeyColumns.values()), info.pkTable.table.getName(), tableInfo.table);
 				if (record != null) {
-					fk.setPrimaryKey(record);
+					fk.setReferenceKey(record);
 				}
 			}
 			fks.close();
@@ -550,6 +613,9 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 			DatabaseMetaData metadata, Collection<TableInfo> tables, boolean uniqueOnly) throws SQLException {
 		LogManager.logDetail(LogConstants.CTX_CONNECTOR, "JDBCMetadataProcessor - Importing index info"); //$NON-NLS-1$
 		for (TableInfo tableInfo : tables) {
+			if (!getIndexInfoForTable(tableInfo.catalog, tableInfo.schema, tableInfo.name, uniqueOnly, importApproximateIndexes, tableInfo.type)) {
+				continue;
+			}
 			ResultSet indexInfo = metadata.getIndexInfo(tableInfo.catalog, tableInfo.schema, tableInfo.name, uniqueOnly, importApproximateIndexes);
 			TreeMap<Short, String> indexColumns = null;
 			String indexName = null;
@@ -560,14 +626,14 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 			while (indexInfo.next()) {
 				short type = indexInfo.getShort(7);
 				if (type == DatabaseMetaData.tableIndexStatistic) {
-					tableInfo.table.setCardinality(indexInfo.getInt(11));
+					tableInfo.table.setCardinality(getCardinality(indexInfo));
 					cardinalitySet = true;
 					continue;
 				}
 				short ordinalPosition = indexInfo.getShort(8);
 				if (useAnyIndexCardinality && !cardinalitySet) {
-					int cardinality = indexInfo.getInt(11);
-					tableInfo.table.setCardinality(Math.max(cardinality, tableInfo.table.getCardinality()));
+					long cardinality = getCardinality(indexInfo);
+					tableInfo.table.setCardinality(Math.max(cardinality, (long)tableInfo.table.getCardinalityAsFloat()));
 				}
 				if (ordinalPosition <= savedOrdinalPosition) {
 					if (valid && indexColumns != null && (!uniqueOnly || !nonUnique) 
@@ -601,6 +667,41 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 		}
 	}
 
+	/**
+	 * Get the cardinality, trying first using getLong for tables with more than max int rows
+	 * @param indexInfo
+	 * @return
+	 * @throws SQLException
+	 */
+	private long getCardinality(ResultSet indexInfo) throws SQLException {
+		long result = Table.UNKNOWN_CARDINALITY;
+		try {
+			result = indexInfo.getLong(11);
+			
+		} catch (SQLException e) {
+			//can't get as long, try int
+			result = indexInfo.getInt(11);
+		}
+		if (indexInfo.wasNull()) {
+			return Table.UNKNOWN_CARDINALITY;
+		}
+		return result;
+	}
+
+	/**
+	 * @param catalogName
+	 * @param schemaName
+	 * @param tableName
+	 * @param uniqueOnly
+	 * @param approximateIndexes
+	 * @param tableType 
+	 * @return
+	 */
+	protected boolean getIndexInfoForTable(String catalogName, String schemaName, String tableName, boolean uniqueOnly, 
+			boolean approximateIndexes, String tableType) {
+		return true;
+	}
+
 	private String getFullyQualifiedName(String catalogName, String schemaName, String objectName) {
 		return getFullyQualifiedName(catalogName, schemaName, objectName, false);
 	}
@@ -612,7 +713,7 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
 				fullName = (quoted?quoteName(schemaName):schemaName) + AbstractMetadataRecord.NAME_DELIM_CHAR + fullName;
 			}
 			if (useCatalogName && catalogName != null && catalogName.length() > 0) {
-				fullName = (quoted?quoteName(catalogName):catalogName) + AbstractMetadataRecord.NAME_DELIM_CHAR + fullName;
+				fullName = (quoted?quoteName(catalogName):catalogName) + catalogSeparator + fullName;
 			}
 		}
 		return fullName;
@@ -819,11 +920,22 @@ public class JDBCMetdataProcessor implements MetadataProcessor<Connection>{
     
     @TranslatorProperty(display="Exclude Tables", category=PropertyType.IMPORT, description="A case-insensitive regular expression that when matched against a fully qualified Teiid table name will exclude it from import.  Applied after table names are retrieved.  Use a negative look-ahead (?!<inclusion pattern>).* to act as an inclusion filter")
     public String getExcludeTables() {
+    	if (this.excludeTables == null) {
+    		return null;
+    	}
         return this.excludeTables.pattern();
     }
     
     @TranslatorProperty(display="Exclude Procedures", category=PropertyType.IMPORT, description="A case-insensitive regular expression that when matched against a fully qualified Teiid procedure name will exclude it from import.  Applied after procedure names are retrieved.  Use a negative look-ahead (?!<inclusion pattern>).* to act as an inclusion filter")
     public String getExcludeProcedures() {
+    	if (this.excludeProcedures == null) {
+    		return null;
+    	}
         return this.excludeProcedures.pattern();
     }    
+    
+    public void setQuoteString(String quoteString) {
+		this.quoteString = quoteString;
+	}
+    
 }

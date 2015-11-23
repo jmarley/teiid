@@ -24,6 +24,7 @@ package org.teiid.translator.odata;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 import java.io.FileReader;
 import java.io.StringReader;
@@ -32,8 +33,19 @@ import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
 
+import org.core4j.Enumerable;
 import org.junit.Test;
-import org.odata4j.edm.*;
+import org.odata4j.edm.EdmAssociation;
+import org.odata4j.edm.EdmAssociationEnd;
+import org.odata4j.edm.EdmAssociationSet;
+import org.odata4j.edm.EdmAssociationSetEnd;
+import org.odata4j.edm.EdmDataServices;
+import org.odata4j.edm.EdmEntityContainer;
+import org.odata4j.edm.EdmEntitySet;
+import org.odata4j.edm.EdmEntityType;
+import org.odata4j.edm.EdmNavigationProperty;
+import org.odata4j.edm.EdmProperty;
+import org.odata4j.edm.EdmSchema;
 import org.odata4j.format.xml.EdmxFormatParser;
 import org.odata4j.format.xml.EdmxFormatWriter;
 import org.odata4j.stax2.util.StaxUtil;
@@ -42,7 +54,9 @@ import org.teiid.adminapi.impl.ModelMetaData;
 import org.teiid.core.util.ObjectConverterUtil;
 import org.teiid.core.util.PropertiesUtils;
 import org.teiid.core.util.UnitTestUtil;
+import org.teiid.metadata.Column;
 import org.teiid.metadata.MetadataFactory;
+import org.teiid.metadata.Procedure;
 import org.teiid.query.metadata.DDLStringVisitor;
 import org.teiid.query.metadata.MetadataValidator;
 import org.teiid.query.metadata.SystemMetadata;
@@ -71,6 +85,35 @@ public class TestDataEntitySchemaBuilder {
 	    	assertEdmSchema(expected, actual);
 	    }
 	}
+	
+    @Test
+    public void testArrayIterateMetadata() throws Exception {
+        TransformationMetadata metadata = RealMetadataFactory.fromDDL(ObjectConverterUtil.convertFileToString(UnitTestUtil.getTestDataFile("northwind.ddl")), "northwind", "nw");       
+        StringWriter sw = new StringWriter();
+        EdmDataServices eds = ODataEntitySchemaBuilder.buildMetadata(metadata.getMetadataStore());
+        EdmxFormatWriter.write(eds, sw);
+        
+        //System.out.println(sw.toString());
+    }	
+	
+    @Test
+    public void testMetadataWithSelfJoin() throws Exception {
+        TransformationMetadata metadata = RealMetadataFactory.fromDDL(ObjectConverterUtil.convertFileToString(UnitTestUtil.getTestDataFile("categories.ddl")), "northwind", "nw");       
+        StringWriter sw = new StringWriter();
+        EdmDataServices eds = ODataEntitySchemaBuilder.buildMetadata(metadata.getMetadataStore());
+        EdmxFormatWriter.write(eds, sw);
+        
+        String expectedXML = "<?xml version=\"1.0\" encoding=\"utf-8\"?><edmx:Edmx Version=\"1.0\" xmlns:edmx=\"http://schemas.microsoft.com/ado/2007/06/edmx\"><edmx:DataServices m:DataServiceVersion=\"2.0\" xmlns:m=\"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata\"><Schema Namespace=\"nw\" xmlns=\"http://schemas.microsoft.com/ado/2008/09/edm\"><EntityType Name=\"Category\"><Key><PropertyRef Name=\"CategoryID\"></PropertyRef></Key><Property Name=\"CategoryID\" Type=\"Edm.Int32\" Nullable=\"false\"></Property><Property Name=\"Name\" Type=\"Edm.String\" Nullable=\"false\" MaxLength=\"25\" FixedLength=\"false\" Unicode=\"true\"></Property><Property Name=\"ParentCategoryID\" Type=\"Edm.Int32\" Nullable=\"false\"></Property><NavigationProperty Name=\"Category\" Relationship=\"nw.Category_FK_CATEGORY_ID\" FromRole=\"Category\" ToRole=\"Category\"></NavigationProperty></EntityType><Association Name=\"Category_FK_CATEGORY_ID\"><End Type=\"nw.Category\" Multiplicity=\"*\" Role=\"Category\"></End><End Type=\"nw.Category\" Multiplicity=\"0..1\" Role=\"Category\"></End><ReferentialConstraint><Principal Role=\"Category\"><PropertyRef Name=\"CategoryID\"></PropertyRef></Principal><Dependent Role=\"Category\"><PropertyRef Name=\"ParentCategoryID\"></PropertyRef></Dependent></ReferentialConstraint></Association><EntityContainer Name=\"nw\" m:IsDefaultEntityContainer=\"false\"><EntitySet Name=\"Category\" EntityType=\"nw.Category\"></EntitySet><AssociationSet Name=\"Category_FK_CATEGORY_ID\" Association=\"nw.Category_FK_CATEGORY_ID\"><End EntitySet=\"Category\" Role=\"Category\"></End><End EntitySet=\"Category\" Role=\"Category\"></End></AssociationSet></EntityContainer></Schema></edmx:DataServices></edmx:Edmx>\n";        		
+        EdmDataServices pds = new EdmxFormatParser().parseMetadata(StaxUtil.newXMLEventReader(new StringReader(expectedXML)));
+        
+        assertEquals(eds.getSchemas().size(), pds.getSchemas().size());
+        
+        for (int i = 0; i < eds.getSchemas().size(); i++) {
+            EdmSchema expected = eds.getSchemas().get(i);
+            EdmSchema actual = pds.getSchemas().get(i);
+            assertEdmSchema(expected, actual);
+        }
+    }	
 
 	private void assertEdmSchema(EdmSchema expected, EdmSchema actual) {
 		assertEquals(expected.getEntityTypes().size(), actual.getEntityTypes().size());
@@ -210,6 +253,29 @@ public class TestDataEntitySchemaBuilder {
 		assertTrue(edm.findEdmEntityType("nw.RMTSAMPLEFLIGHT.Booking")!=null);
 	}
 	
+    @Test
+    public void testEntityPropertyName() throws Exception{
+        String ddl = "CREATE FOREIGN TABLE BookingCollection (\n" + 
+                "   carrid bigdecimal NOT NULL OPTIONS(NAMEINSOURCE '\"carrageid\"'),\n" + 
+                "   connid string(5) NOT NULL  OPTIONS(NAMEINSOURCE '\"connectionid\"'),\n" + 
+                "   PRIMARY KEY(carrid)\n" + 
+                ") OPTIONS (UPDATABLE TRUE, " +
+                " \"teiid_odata:EntityType\" 'RMTSAMPLEFLIGHT.Booking');";
+        
+        TransformationMetadata metadata = RealMetadataFactory.fromDDL(ddl, "northwind", "nw");      
+        EdmDataServices edm = ODataEntitySchemaBuilder.buildMetadata(metadata.getMetadataStore());
+        assertTrue(edm.findEdmEntitySet("nw.BookingCollection")!=null);
+        Enumerable<EdmProperty> properties = edm.getEdmEntitySet("nw.BookingCollection").getType().getProperties();
+        assertEquals(2, properties.count());
+        Iterator<EdmProperty> it = properties.iterator();
+        while(it.hasNext()) {
+            EdmProperty property = it.next();
+            if (!property.getName().equals("carrid") && !property.getName().equals("connid")) {
+                fail();
+            }
+        }
+    }	
+	
 	@Test
 	public void testEntityTypeName2() throws Exception{
 		TransformationMetadata metadata = getNorthwindMetadataFromODataXML();		
@@ -250,4 +316,28 @@ public class TestDataEntitySchemaBuilder {
     	}		
 		return metadata;
 	}	
+	
+    @Test
+    public void testArrayType() throws Exception {
+        ModelMetaData model = new ModelMetaData();
+        model.setName("nw");
+        model.setModelType(Type.PHYSICAL);
+        MetadataFactory mf = new MetadataFactory("northwind", 1, SystemMetadata.getInstance().getRuntimeTypeMap(), model);
+        
+        EdmDataServices edm = new EdmxFormatParser().parseMetadata(StaxUtil.newXMLEventReader(new FileReader(UnitTestUtil.getTestDataFile("arraytest.xml"))));
+        ODataMetadataProcessor metadataProcessor = new ODataMetadataProcessor();
+        PropertiesUtils.setBeanProperties(metadataProcessor, mf.getModelProperties(), "importer"); //$NON-NLS-1$
+        metadataProcessor.getMetadata(mf, edm);
+        
+        Column c = mf.getSchema().getTable("G2").getColumnByName("e3");
+        assertEquals("integer[]", c.getRuntimeType());
+        
+        Procedure p = mf.getSchema().getProcedure("ARRAYITERATE");
+        assertEquals("varbinary[]", p.getParameters().get(0).getRuntimeType());
+        assertEquals("varbinary",  p.getResultSet().getColumns().get(0).getRuntimeType());
+       
+        
+        //String ddl = DDLStringVisitor.getDDLString(mf.getSchema(), null, null);
+        //System.out.println(ddl);
+    }
 }

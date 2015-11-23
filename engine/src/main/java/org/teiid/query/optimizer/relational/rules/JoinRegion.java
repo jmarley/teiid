@@ -233,22 +233,23 @@ class JoinRegion {
      * @throws QueryMetadataException 
      * @throws QueryPlannerException 
      */
-    public double scoreRegion(Object[] joinOrder, int startIndex, QueryMetadataInterface metadata, CapabilitiesFinder capFinder, CommandContext context) throws QueryMetadataException, TeiidComponentException, QueryPlannerException {
+    public double scoreRegion(Object[] joinOrder, int startIndex, QueryMetadataInterface metadata, CapabilitiesFinder capFinder, CommandContext context, boolean partial) throws QueryMetadataException, TeiidComponentException, QueryPlannerException {
         List<Map.Entry<PlanNode, PlanNode>> joinSourceEntries = new ArrayList<Map.Entry<PlanNode, PlanNode>>(joinSourceNodes.entrySet());
         double totalIntermediatCost = 0;
         double cost = 1;
         
         HashSet<PlanNode> criteria = new HashSet<PlanNode>(this.criteriaNodes);
         HashSet<GroupSymbol> groups = new HashSet<GroupSymbol>(this.joinSourceNodes.size());
-        boolean hasUnknown = false;
-        //only calcuate up to the second to last as the last is not an intermediate result
-        for (int i = 0; i < joinOrder.length - 1; i++) {
+        //only calculate up to the second to last as the last is not an intermediate result
+        for (int i = 0; i < joinOrder.length - (partial?0:1); i++) {
+        	boolean hasUnknown = false;
+        	boolean shouldFilter = true;
             Integer source = (Integer)joinOrder[i];
             
             Map.Entry<PlanNode, PlanNode> entry = joinSourceEntries.get(source.intValue());
             PlanNode joinSourceRoot = entry.getValue();
             
-            if (startIndex == 0) {
+            if (i >= startIndex) {
 	            //check to make sure that this group ordering satisfies the access patterns
 	            if (!this.unsatisfiedAccessPatterns.isEmpty() || this.containsNestedTable) {
 	                PlanNode joinSource = entry.getKey();
@@ -263,7 +264,7 @@ class JoinRegion {
             
             groups.addAll(joinSourceRoot.getGroups());
             
-            if (startIndex > 0) {
+            if (startIndex > 0 && i < startIndex) {
             	continue;
             }
             
@@ -279,13 +280,13 @@ class JoinRegion {
         		sourceCost = UNKNOWN_TUPLE_EST;
         		hasUnknown = true;
                 if (applicableCriteria != null && !applicableCriteria.isEmpty()) {
+                	shouldFilter = false;
                 	CompoundCriteria cc = new CompoundCriteria();
                 	for (PlanNode planNode : applicableCriteria) {
     					cc.addCriteria((Criteria) planNode.getProperty(NodeConstants.Info.SELECT_CRITERIA));
     				}
                 	sourceCost = (float)cost;
                 	criteria.removeAll(applicableCriteria);
-	            	applicableCriteria = null;
             		if (NewCalculateCostUtil.usesKey(cc, metadata) || (i >= 1 && joinSourceRoot.hasProperty(Info.MAKE_DEP) && !joinSourceRoot.hasBooleanProperty(Info.MAKE_NOT_DEP))) {
     	            	sourceCost = Math.min(UNKNOWN_TUPLE_EST, sourceCost * Math.min(NewCalculateCostUtil.UNKNOWN_JOIN_SCALING, sourceCost));
             		} else {
@@ -321,7 +322,7 @@ class JoinRegion {
         
             cost *= sourceCost;
             
-            if (applicableCriteria != null) {
+            if (applicableCriteria != null && shouldFilter) {
                 for (PlanNode criteriaNode : applicableCriteria) {
                     float filter = ((Float)criteriaNode.getProperty(NodeConstants.Info.EST_SELECTIVITY)).floatValue();
                     
@@ -537,16 +538,16 @@ class JoinRegion {
         return false;
     }
     
-    public List<PlanNode> getJoinCriteriaForGroups(Set<GroupSymbol> groups) {
-        return getJoinCriteriaForGroups(groups, getCriteriaNodes());
-    }
-    
     //TODO: this should be better than a linear search
     protected List<PlanNode> getJoinCriteriaForGroups(Set<GroupSymbol> groups, Collection<PlanNode> nodes) {
         List<PlanNode> result = new LinkedList<PlanNode>();
         
         for (PlanNode critNode : nodes) {
             if (groups.containsAll(critNode.getGroups())) {
+            	Criteria crit = (Criteria) critNode.getProperty(Info.SELECT_CRITERIA);
+            	if (crit instanceof CompareCriteria && ((CompareCriteria) crit).isOptional()) {
+            		continue;
+            	}
                 result.add(critNode);
             }
         }

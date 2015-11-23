@@ -59,6 +59,16 @@ public class MongoDBPlugin {
     	TEIID18023,
     	TEIID18024,
     	TEIID18025,
-    	TEIID18026
+    	TEIID18026,
+    	TEIID18027,
+        TEIID18028,
+        TEIID18029,
+        TEIID18030,
+        TEIID18031,
+        TEIID18032,
+        TEIID18033,
+        TEIID18034,
+        TEIID18035,
+        TEIID18036
     }
 }

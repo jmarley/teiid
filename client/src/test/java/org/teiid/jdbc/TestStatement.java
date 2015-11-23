@@ -24,7 +24,9 @@ package org.teiid.jdbc;
 
 import static org.junit.Assert.*;
 
+import java.sql.Connection;
 import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.sql.SQLWarning;
 import java.util.Arrays;
 import java.util.List;
@@ -95,6 +97,9 @@ public class TestStatement {
 		
 		assertFalse(statement.execute("set foo 'b''ar' ; ")); //$NON-NLS-1$
 		Mockito.verify(conn).setExecutionProperty("foo", "b'ar");
+		
+		assertFalse(statement.execute("set \"foo\" 'b''a1r' ; ")); //$NON-NLS-1$
+		Mockito.verify(conn).setExecutionProperty("foo", "b'a1r");
 	}
 	
 	@Test public void testSetPayloadStatement() throws Exception {
@@ -231,6 +236,27 @@ public class TestStatement {
 	@Test public void testSet() {
 		Matcher m = StatementImpl.SET_STATEMENT.matcher("set foo to 1");
 		assertTrue(m.matches());
+	}
+	
+	@Test public void testQuotedSet() {
+		Matcher m = StatementImpl.SET_STATEMENT.matcher("set \"foo\"\"\" to 1");
+		assertTrue(m.matches());
+		assertEquals("\"foo\"\"\"", m.group(2));
+		m = StatementImpl.SHOW_STATEMENT.matcher("show \"foo\"");
+		assertTrue(m.matches());
+	}
+	
+	@Test public void testSetTxnIsolationLevel() throws SQLException {
+		ConnectionImpl conn = Mockito.mock(ConnectionImpl.class);
+		StatementImpl statement = new StatementImpl(conn, ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
+		assertFalse(statement.execute("set session characteristics as transaction isolation level read committed")); //$NON-NLS-1$
+		Mockito.verify(conn).setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+		assertFalse(statement.execute("set session characteristics as transaction isolation level read uncommitted")); //$NON-NLS-1$
+		Mockito.verify(conn).setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
+		assertFalse(statement.execute("set session characteristics as transaction isolation level serializable")); //$NON-NLS-1$
+		Mockito.verify(conn).setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);
+		assertFalse(statement.execute("set session characteristics as transaction isolation level repeatable read")); //$NON-NLS-1$
+		Mockito.verify(conn).setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
 	}
 	
 }

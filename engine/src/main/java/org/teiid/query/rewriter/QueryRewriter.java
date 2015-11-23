@@ -67,11 +67,13 @@ import org.teiid.query.resolver.QueryResolver;
 import org.teiid.query.resolver.util.ResolverUtil;
 import org.teiid.query.sql.LanguageObject;
 import org.teiid.query.sql.LanguageObject.Util;
+import org.teiid.query.sql.LanguageVisitor;
 import org.teiid.query.sql.ProcedureReservedWords;
 import org.teiid.query.sql.lang.*;
 import org.teiid.query.sql.lang.PredicateCriteria.Negatable;
 import org.teiid.query.sql.navigator.DeepPostOrderNavigator;
 import org.teiid.query.sql.navigator.PostOrderNavigator;
+import org.teiid.query.sql.navigator.PreOrPostOrderNavigator;
 import org.teiid.query.sql.proc.*;
 import org.teiid.query.sql.symbol.*;
 import org.teiid.query.sql.symbol.AggregateSymbol.Type;
@@ -83,6 +85,7 @@ import org.teiid.query.sql.visitor.EvaluatableVisitor;
 import org.teiid.query.sql.visitor.EvaluatableVisitor.EvaluationLevel;
 import org.teiid.query.sql.visitor.ExpressionMappingVisitor;
 import org.teiid.query.sql.visitor.FunctionCollectorVisitor;
+import org.teiid.query.sql.visitor.GroupCollectorVisitor;
 import org.teiid.query.sql.visitor.ValueIteratorProviderCollectorVisitor;
 import org.teiid.query.util.CommandContext;
 import org.teiid.query.validator.UpdateValidator.UpdateInfo;
@@ -116,6 +119,7 @@ public class QueryRewriter {
     	ALIASED_FUNCTIONS.put("nvl", SourceSystemFunctions.IFNULL); //$NON-NLS-1$
     	ALIASED_FUNCTIONS.put("||", SourceSystemFunctions.CONCAT); //$NON-NLS-1$
     	ALIASED_FUNCTIONS.put("chr", SourceSystemFunctions.CHAR); //$NON-NLS-1$
+    	ALIASED_FUNCTIONS.put("st_geomfrombinary", SourceSystemFunctions.ST_GEOMFROMWKB); //$NON-NLS-1$
     	PARSE_FORMAT_TYPES.addAll(    Arrays.asList(DataTypeManager.DefaultDataTypes.TIME, 
     		DataTypeManager.DefaultDataTypes.DATE, DataTypeManager.DefaultDataTypes.TIMESTAMP, DataTypeManager.DefaultDataTypes.BIG_DECIMAL, 
     		DataTypeManager.DefaultDataTypes.BIG_INTEGER, DataTypeManager.DefaultDataTypes.INTEGER, DataTypeManager.DefaultDataTypes.LONG, 
@@ -132,6 +136,8 @@ public class QueryRewriter {
     private final static Short SHORT_ZERO = new Short((short)0);
     private final static Byte BYTE_ZERO = new Byte((byte)0);
 	private boolean rewriteAggs = true;
+	
+	private boolean preserveUnknown;
     
     private QueryMetadataInterface metadata;
     private CommandContext context;
@@ -190,17 +196,32 @@ public class QueryRewriter {
             	if (removeOrderBy && queryCommand.getLimit() == null) {
             		queryCommand.setOrderBy(null);
                 }
+            	Map<Object, WithQueryCommand> replacements = null;
             	if (queryCommand.getWith() != null) {
-            		for (WithQueryCommand withQueryCommand : queryCommand.getWith()) {
+            		outer: for (WithQueryCommand withQueryCommand : queryCommand.getWith()) {
             			if (withQueryCommand.getColumns() == null) {
             				List<ElementSymbol> columns = ResolverUtil.resolveElementsInGroup(withQueryCommand.getGroupSymbol(), metadata);
             				withQueryCommand.setColumns(LanguageObject.Util.deepClone(columns, ElementSymbol.class));
             			}
 						rewriteSubqueryContainer(withQueryCommand, true);
+						
+						//check for scalar with clauses
+						if (GroupCollectorVisitor.getGroups(withQueryCommand.getCommand(), false).isEmpty()) {
+							//if deterministic, just inline
+							for (Expression ex : FunctionCollectorVisitor.getFunctions(withQueryCommand.getCommand(), false, true)) {
+					            if (FunctionCollectorVisitor.isNonDeterministic(ex)) {
+					            	continue outer;
+					            }
+							}
+							if (replacements == null) {
+								replacements = new HashMap<Object, WithQueryCommand>();
+							}
+							replacements.put(withQueryCommand.getGroupSymbol().getMetadataID(), withQueryCommand);
+						}
 					}
             	}
                 if(command instanceof Query) {
-                    command = rewriteQuery((Query) command);
+                    command = rewriteQuery((Query) command, replacements);
                 }else {
                     command = rewriteSetQuery((SetQuery) command);
                 }
@@ -325,7 +346,10 @@ public class QueryRewriter {
 				// replaced in the processor with variable values
 				Expression expr = exprStmt.getExpression();
 				if (expr != null) {
+			        boolean preserveUnknownOld = preserveUnknown;
+			        preserveUnknown = true;
 					expr = rewriteExpressionDirect(expr);
+					preserveUnknown = preserveUnknownOld;
 	                exprStmt.setExpression(expr);
 				}
 				break;
@@ -384,7 +408,7 @@ public class QueryRewriter {
         }
     }
     
-	private Command rewriteQuery(Query query)
+	private Command rewriteQuery(Query query, Map<Object, WithQueryCommand> replacements)
              throws TeiidComponentException, TeiidProcessingException{
         
         // Rewrite from clause
@@ -393,7 +417,7 @@ public class QueryRewriter {
             List<FromClause> clauses = new ArrayList<FromClause>(from.getClauses().size());
             Iterator<FromClause> clauseIter = from.getClauses().iterator();
             while(clauseIter.hasNext()) {
-                clauses.add( rewriteFromClause(query, clauseIter.next()) );
+                clauses.add( rewriteFromClause(query, clauseIter.next(), replacements) );
             }
             from.setClauses(clauses);
         } else {
@@ -408,7 +432,10 @@ public class QueryRewriter {
         		//because we aren't considering the xml pseudo-functions context, row limit, etc. 
         		rewriteExpressions(crit);
         	} else {
+        		boolean preserveUnknownOld = preserveUnknown;
+                preserveUnknown = false;
         		crit = rewriteCriteria(crit);
+        		preserveUnknown = preserveUnknownOld;
         	}
             if(crit == TRUE_CRITERIA) {
                 query.setCriteria(null);
@@ -428,7 +455,10 @@ public class QueryRewriter {
         // Rewrite having
         Criteria having = query.getHaving();
         if(having != null) {
+    		boolean preserveUnknownOld = preserveUnknown;
+            preserveUnknown = false;
             crit = rewriteCriteria(having);
+            preserveUnknown = preserveUnknownOld;
             if(crit == TRUE_CRITERIA) {
                 query.setHaving(null);
             } else {
@@ -449,12 +479,15 @@ public class QueryRewriter {
         	}
         }
         
+        boolean preserveUnknownOld = preserveUnknown;
+        preserveUnknown = true;
         rewriteExpressions(query.getSelect());
-
+        
         if (!query.getIsXML()) {
             query = (Query)rewriteOrderBy(query);
         }
-        
+        preserveUnknown = preserveUnknownOld;
+
         if (query.getLimit() != null) {
             query.setLimit(rewriteLimitClause(query.getLimit()));
         }
@@ -476,7 +509,7 @@ public class QueryRewriter {
 		List<Criteria> current = Criteria.separateCriteriaByAnd(query.getCriteria());
 		query.setCriteria(null);
 		List<GroupSymbol> groups = query.getFrom().getGroups();
-		HashSet<String> names = new HashSet<String>();
+		TreeSet<String> names = new TreeSet<String>(String.CASE_INSENSITIVE_ORDER);
 		for (GroupSymbol gs : groups) {
 			names.add(gs.getName());
 		}
@@ -523,7 +556,7 @@ public class QueryRewriter {
 			query.setCriteria(Criteria.combineCriteria(query.getCriteria(), mappedCriteria));
 			FromClause clause = q.getFrom().getClauses().get(0);
 			if (plannedResult.makeInd) {
-				clause.setMakeInd(true);
+				clause.setMakeInd(new Option.MakeDep());
 			}
 		    query.getFrom().addClause(clause);
 		    query.getTemporaryMetadata().getData().putAll(q.getTemporaryMetadata().getData());
@@ -629,8 +662,9 @@ public class QueryRewriter {
      *  
      * @param query
      * @throws TeiidComponentException, MetaMatrixProcessingException
+     * @throws TeiidProcessingException 
      */
-    public QueryCommand rewriteOrderBy(QueryCommand queryCommand) throws TeiidComponentException {
+    public QueryCommand rewriteOrderBy(QueryCommand queryCommand) throws TeiidComponentException, TeiidProcessingException {
     	final OrderBy orderBy = queryCommand.getOrderBy();
         if (orderBy == null) {
             return queryCommand;
@@ -638,22 +672,19 @@ public class QueryRewriter {
         Select select = queryCommand.getProjectedQuery().getSelect();
         final List<Expression> projectedSymbols = select.getProjectedSymbols();
         
-        LinkedList<OrderByItem> unrelatedItems = new LinkedList<OrderByItem>();
-        
-        rewriteOrderBy(queryCommand, orderBy, projectedSymbols, unrelatedItems);
+        rewriteOrderBy(queryCommand, orderBy, projectedSymbols, context, metadata);
         
     	return queryCommand;
     }
 
 	public static void rewriteOrderBy(QueryCommand queryCommand,
-			final OrderBy orderBy, final List projectedSymbols,
-			LinkedList<OrderByItem> unrelatedItems) {
+			final OrderBy orderBy, final List projectedSymbols, CommandContext context, QueryMetadataInterface metadata) throws TeiidComponentException, TeiidProcessingException {
 		HashSet<Expression> previousExpressions = new HashSet<Expression>();
         for (int i = 0; i < orderBy.getVariableCount(); i++) {
         	Expression querySymbol = orderBy.getVariable(i);
         	int index = orderBy.getExpressionPosition(i);
         	if (index == -1) {
-    			unrelatedItems.add(orderBy.getOrderByItems().get(i));
+        		querySymbol = rewriteExpression(querySymbol, context, metadata);
         	} else {
         		querySymbol = (Expression)projectedSymbols.get(index);
         	}
@@ -745,10 +776,10 @@ public class QueryRewriter {
         return setQuery;
     }
 
-	private FromClause rewriteFromClause(Query parent, FromClause clause)
+	private FromClause rewriteFromClause(Query parent, FromClause clause, Map<Object, WithQueryCommand> replacements)
 			 throws TeiidComponentException, TeiidProcessingException{
 		if(clause instanceof JoinPredicate) {
-			return rewriteJoinPredicate(parent, (JoinPredicate) clause);
+			return rewriteJoinPredicate(parent, (JoinPredicate) clause, replacements);
         } else if (clause instanceof SubqueryFromClause) {
             rewriteSubqueryContainer((SubqueryFromClause)clause, true);
         } else if (clause instanceof TextTable) {
@@ -761,11 +792,19 @@ public class QueryRewriter {
         } else if (clause instanceof ArrayTable) {
         	ArrayTable at = (ArrayTable)clause;
         	at.setArrayValue(rewriteExpressionDirect(at.getArrayValue()));
+        } else if (clause instanceof UnaryFromClause) {
+        	if (replacements != null) {
+        		UnaryFromClause ufc = (UnaryFromClause) clause;
+				WithQueryCommand command = replacements.get(ufc.getGroup().getMetadataID());
+        		if (command != null) {
+        			ufc.setExpandedCommand((Command) command.getCommand().clone());
+        		}
+        	}
         }
         return clause;
 	}
 
-	private JoinPredicate rewriteJoinPredicate(Query parent, JoinPredicate predicate)
+	private JoinPredicate rewriteJoinPredicate(Query parent, JoinPredicate predicate, Map<Object, WithQueryCommand> replacements)
 			 throws TeiidComponentException, TeiidProcessingException{
 		List joinCrits = predicate.getJoinCriteria();
 		if(joinCrits != null && joinCrits.size() > 0) {
@@ -791,8 +830,8 @@ public class QueryRewriter {
             predicate.setRightClause(leftClause);
         }
 
-        predicate.setLeftClause( rewriteFromClause(parent, predicate.getLeftClause() ));
-        predicate.setRightClause( rewriteFromClause(parent, predicate.getRightClause() ));
+        predicate.setLeftClause( rewriteFromClause(parent, predicate.getLeftClause(), replacements));
+        predicate.setRightClause( rewriteFromClause(parent, predicate.getRightClause(), replacements ));
     
 		return predicate;
 	}
@@ -962,9 +1001,13 @@ public class QueryRewriter {
                         return converted;
                     }
                 } else if (UNKNOWN_CRITERIA.equals(converted)) {
-                    if (operator == CompoundCriteria.AND) {
-                        return FALSE_CRITERIA;
-                    } 
+                	if (preserveUnknown) {
+                		newCrits.add(converted);
+                	} else {
+                		if(operator == CompoundCriteria.AND) {
+                            return FALSE_CRITERIA;
+                        }	
+                	}
                 } else { 
                     if (operator == CompoundCriteria.AND) {
 	                	 converted = rewriteAndConjunct(converted, exprMap, newCrits);
@@ -1002,7 +1045,7 @@ public class QueryRewriter {
 			                	} else {
 				                	newCrits.remove(crit);
 			                		CompareCriteria other = (CompareCriteria)crit;
-			                		SetCriteria sc = new SetCriteria(cc.getLeftExpression(), new LinkedHashSet<Expression>());
+			                		SetCriteria sc = new SetCriteria(cc.getLeftExpression(), DataTypeManager.isHashable(other.getRightExpression().getType())?new LinkedHashSet<Constant>():new TreeSet<Constant>());
 			                		sc.setAllConstants(true);
 			                		sc.getValues().add(cc.getRightExpression());
 			                		sc.getValues().add(other.getRightExpression());
@@ -1070,7 +1113,7 @@ public class QueryRewriter {
             	} else {
             		CompareCriteria cc = (CompareCriteria)crit;
             		for (Iterator<Constant> exprIter = sc.getValues().iterator(); exprIter.hasNext();) {
-						if (!Evaluator.compare(cc, exprIter.next().getValue(), ((Constant)cc.getRightExpression()).getValue())) {
+						if (!Evaluator.compare(cc.getOperator(), exprIter.next().getValue(), ((Constant)cc.getRightExpression()).getValue())) {
 							exprIter.remove();
 						}
 					}
@@ -1099,7 +1142,7 @@ public class QueryRewriter {
             		SetCriteria sc = (SetCriteria)crit;
             		boolean modified = false;
             		for (Iterator<Constant> exprIter = sc.getValues().iterator(); exprIter.hasNext();) {
-						if (!Evaluator.compare(cc, exprIter.next().getValue(), ((Constant)cc.getRightExpression()).getValue())) {
+						if (!Evaluator.compare(cc.getOperator(), exprIter.next().getValue(), ((Constant)cc.getRightExpression()).getValue())) {
 							if (!modified) {
 								modified = true;
 								newCrits.remove(sc);
@@ -1129,13 +1172,13 @@ public class QueryRewriter {
             		if (cc1.getOperator() == CompareCriteria.NE) {
                 		exprMap.put(cc.getLeftExpression(), cc);
             		} else if (cc1.getOperator() == CompareCriteria.EQ) {
-            			if (!Evaluator.compare(cc, ((Constant)cc1.getRightExpression()).getValue(), ((Constant)cc.getRightExpression()).getValue())) {
+            			if (!Evaluator.compare(cc.getOperator(), ((Constant)cc1.getRightExpression()).getValue(), ((Constant)cc.getRightExpression()).getValue())) {
 							return FALSE_CRITERIA;
 						}
             			return null;
             		} 
             		if (cc.getOperator() == CompareCriteria.EQ) {
-            			if (!Evaluator.compare(cc1, ((Constant)cc.getRightExpression()).getValue(), ((Constant)cc1.getRightExpression()).getValue())) {
+            			if (!Evaluator.compare(cc1.getOperator(), ((Constant)cc.getRightExpression()).getValue(), ((Constant)cc1.getRightExpression()).getValue())) {
             				return FALSE_CRITERIA;
             			}
             			exprMap.put(cc.getLeftExpression(), cc);
@@ -1302,18 +1345,40 @@ public class QueryRewriter {
     		if (criteria.getPredicateQuantifier() != SubqueryCompareCriteria.ALL && criteria.getOperator() != CompareCriteria.EQ && criteria.getOperator() != CompareCriteria.NE) {
 	    		CompareCriteria cc = new CompareCriteria();
 	    		cc.setLeftExpression(criteria.getLeftExpression());
-	    		Query q = createInlineViewQuery(new GroupSymbol("X"), criteria.getCommand(), metadata, criteria.getCommand().getProjectedSymbols()); //$NON-NLS-1$
-	    		Expression ses = q.getProjectedSymbols().get(0);
-	    		Expression expr = SymbolMap.getExpression(ses);
-	    		q.getSelect().clearSymbols();
+	    		boolean useView = true;
+	    		if (criteria.getCommand() instanceof Query) {
+	    			Query query = (Query)criteria.getCommand();
+	    			if (!query.hasAggregates() && query.getCriteria() != null && query.getOrderBy() == null) {
+	    				final boolean[] hasWindowFunctions = new boolean[1];
+	    				PreOrPostOrderNavigator.doVisit(query.getSelect(), new LanguageVisitor() {
+	    					public void visit(WindowFunction windowFunction) {
+	    						hasWindowFunctions[0] = true;
+	    					};
+						}, PreOrPostOrderNavigator.PRE_ORDER);
+	    				useView = hasWindowFunctions[0];
+	    			}
+	    		}
 	    		AggregateSymbol.Type type = Type.MAX;
 	    		if (criteria.getOperator() == CompareCriteria.GT || criteria.getOperator() == CompareCriteria.GE) {
 	    			type = Type.MIN;
 	    		}
-	    		q.getSelect().addSymbol(new AggregateSymbol(type.name(), false, expr));
-	    		cc.setRightExpression(new ScalarSubquery(q));
-				cc.setOperator(criteria.getOperator());
-	    		return rewriteCriteria(cc);
+	    		if (useView) {
+		    		Query q = createInlineViewQuery(new GroupSymbol("X"), criteria.getCommand(), metadata, criteria.getCommand().getProjectedSymbols()); //$NON-NLS-1$
+		    		Expression ses = q.getProjectedSymbols().get(0);
+		    		Expression expr = SymbolMap.getExpression(ses);
+		    		q.getSelect().clearSymbols();
+		    		q.getSelect().addSymbol(new AggregateSymbol(type.name(), false, expr));
+		    		ScalarSubquery ss = new ScalarSubquery(q);
+		    		ss.setSubqueryHint(criteria.getSubqueryHint());
+		    		cc.setRightExpression(ss);
+					cc.setOperator(criteria.getOperator());
+		    		return rewriteCriteria(cc);
+	    		}
+	    		Select select = ((Query)criteria.getCommand()).getSelect();
+	    		Expression ex = select.getProjectedSymbols().get(0);
+	    		ex = SymbolMap.getExpression(ex);
+	    		select.setSymbols(Arrays.asList(new AggregateSymbol(type.name(), false, ex)));
+	    		select.setDistinct(false);
     		}
     	}
 
@@ -1915,7 +1980,12 @@ public class QueryRewriter {
             Expression value = rewriteExpressionDirect( (Expression) valIter.next());
             if (isNull(value)) {
             	hasNull = true;
-            	continue;
+            	if (!preserveUnknown) {
+            		if (criteria.isNegated()) {
+            			return FALSE_CRITERIA;
+            		}
+            		continue;
+            	}
             }
             allConstants &= value instanceof Constant;
             newVals.add(value);
@@ -1923,6 +1993,9 @@ public class QueryRewriter {
         
         int size = newVals.size();
         if (size == 1) {
+        	if (preserveUnknown && hasNull) {
+        		return UNKNOWN_CRITERIA;
+        	}
             Expression value = (Expression)newVals.iterator().next();
             return rewriteCriteria(new CompareCriteria(criteria.getExpression(), criteria.isNegated()?CompareCriteria.NE:CompareCriteria.EQ, value));
         } 
@@ -1930,6 +2003,9 @@ public class QueryRewriter {
         criteria.setValues(newVals);
         if (allConstants) {
         	criteria.setAllConstants(true);
+        	if (!DataTypeManager.isHashable(criteria.getExpression().getType())) {
+    			criteria.setValues(new TreeSet(criteria.getValues()));
+        	}
         }        
         
         if (size == 0) {
@@ -2041,6 +2117,15 @@ public class QueryRewriter {
         			}
         		}
         	}
+        } else if (expression instanceof XMLCast) {
+        	XMLCast cast = (XMLCast)expression;
+        	if (cast.getType() == DefaultDataClasses.XML) {
+        		XMLQuery xmlQuery = new XMLQuery();
+        		xmlQuery.setXquery("$i"); //$NON-NLS-1$
+        		xmlQuery.setPassing(Arrays.asList(new DerivedColumn("i", cast.getExpression()))); //$NON-NLS-1$
+        		xmlQuery.compileXqueryExpression();
+        		return xmlQuery;
+        	}
         } else {
         	rewriteExpressions(expression);
         } 
@@ -2059,7 +2144,12 @@ public class QueryRewriter {
 	private Constant evaluate(Expression expression, boolean isBindEligible)
 			throws ExpressionEvaluationException, BlockedException,
 			TeiidComponentException {
-		Object value = evaluator.evaluate(expression, Collections.emptyList());
+		Object value = null;
+		if (expression instanceof Criteria) {
+			value = evaluator.evaluateTVL((Criteria)expression, Collections.emptyList());
+		} else {
+			value = evaluator.evaluate(expression, Collections.emptyList());
+		}
         if (value instanceof Constant) {
         	return (Constant)value; //multi valued substitution
         }
@@ -2624,10 +2714,18 @@ public class QueryRewriter {
         List expressions = insert.getValues();
         List evalExpressions = new ArrayList(expressions.size());
         Iterator expIter = expressions.iterator();
+        boolean preserveUnknownOld = preserveUnknown;
+        preserveUnknown = true;
         while(expIter.hasNext()) {
             Expression exp = (Expression) expIter.next();
-            evalExpressions.add( rewriteExpressionDirect( exp ));
+            if (processing && exp instanceof ExpressionSymbol) {
+            	//expression symbols that were created in the PlanToProcessesConverter
+            	evalExpressions.add( evaluate(exp, true));
+            } else {
+            	evalExpressions.add( rewriteExpressionDirect( exp ));
+            }
         }
+        preserveUnknown = preserveUnknownOld;
 
         insert.setValues(evalExpressions);        
 		return insert;
@@ -2680,7 +2778,7 @@ public class QueryRewriter {
 		}
         query.setFrom(from); 
         QueryResolver.resolveCommand(query, tma);
-        query.setOption(nested.getOption());
+        query.setOption(nested.getOption()!=null?(Option) nested.getOption().clone():null);
         from.getClauses().clear();
         SubqueryFromClause sqfc = new SubqueryFromClause(inlineGroup.getName());
         sqfc.setCommand(nested);
@@ -2745,15 +2843,20 @@ public class QueryRewriter {
 			return rewriteInherentUpdate(update, info);
 		}
 		
+        boolean preserveUnknownOld = preserveUnknown;
+        preserveUnknown = true;
 		// Evaluate any function on the right side of set clauses
         for (SetClause entry : update.getChangeList().getClauses()) {
         	entry.setValue(rewriteExpressionDirect(entry.getValue()));
         }
+        preserveUnknown = preserveUnknownOld;
 
 		// Rewrite criteria
 		Criteria crit = update.getCriteria();
 		if(crit != null) {
+            preserveUnknown = false;
 			update.setCriteria(rewriteCriteria(crit));
+			preserveUnknown = preserveUnknownOld;
 		}
 
 		return update;
@@ -2914,7 +3017,10 @@ public class QueryRewriter {
 		// Rewrite criteria
 		Criteria crit = delete.getCriteria();
 		if(crit != null) {
+    		boolean preserveUnknownOld = preserveUnknown;
+            preserveUnknown = false;
 			delete.setCriteria(rewriteCriteria(crit));
+			preserveUnknown = preserveUnknownOld;
 		}
 
 		return delete;

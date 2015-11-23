@@ -23,18 +23,21 @@ package org.teiid.deployers;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.TreeSet;
+import java.util.concurrent.Future;
 
 import org.teiid.adminapi.DataPolicy;
-import org.teiid.adminapi.Model;
 import org.teiid.adminapi.VDBImport;
 import org.teiid.adminapi.impl.DataPolicyMetadata;
 import org.teiid.adminapi.impl.ModelMetaData;
 import org.teiid.adminapi.impl.VDBMetaData;
 import org.teiid.core.CoreConstants;
+import org.teiid.core.util.PropertiesUtils;
 import org.teiid.dqp.internal.datamgr.ConnectorManager;
 import org.teiid.dqp.internal.datamgr.ConnectorManagerRepository;
 import org.teiid.dqp.internal.process.multisource.MultiSourceMetadataWrapper;
@@ -54,6 +57,9 @@ import org.teiid.vdb.runtime.VDBKey;
  * Represents the runtime state of a vdb that may aggregate several vdbs.
  */
 public class CompositeVDB {
+	
+	private static final boolean WIDEN_COMPARISON_TO_STRING = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.widenComparisonToString", true); //$NON-NLS-1$
+	
 	private VDBMetaData vdb;
 	private MetadataStore store;
 	private LinkedHashMap<String, VDBResources.Resource> visibilityMap;
@@ -65,6 +71,7 @@ public class CompositeVDB {
 	private boolean metadataloadFinished = false;
 	private VDBMetaData mergedVDB;
 	private VDBMetaData originalVDB;
+	private Collection<Future<?>> tasks = Collections.synchronizedSet(new HashSet<Future<?>>());
 	
 	public CompositeVDB(VDBMetaData vdb, MetadataStore metadataStore, LinkedHashMap<String, VDBResources.Resource> visibilityMap, UDFMetaData udf, FunctionTree systemFunctions, ConnectorManagerRepository cmr, VDBRepository vdbRepository, MetadataStore... additionalStores) throws VirtualDatabaseException {
 		this.vdb = vdb;
@@ -98,14 +105,21 @@ public class CompositeVDB {
 					}
 					udfs.add(new FunctionTree(schema.getName(), source, true));
 				}
+				if (!schema.getProcedures().isEmpty()) {
+					FunctionTree ft = FunctionTree.getFunctionProcedures(schema);
+					if (ft != null) {
+						udfs.add(ft);
+					}
+				}
 			}
 		}
 		
 		TransformationMetadata metadata =  new TransformationMetadata(vdb, compositeStore, visibilityMap, systemFunctions, udfs);
-		metadata.setUseOutputNames(false);		
+		metadata.setUseOutputNames(false);
+		metadata.setWidenComparisonToString(WIDEN_COMPARISON_TO_STRING);
 		return metadata;
 	}
-	
+
 	public VDBMetaData getVDB() {
 		return this.mergedVDB;
 	}
@@ -134,23 +148,33 @@ public class CompositeVDB {
 				throw new VirtualDatabaseException(RuntimePlugin.Event.TEIID40083, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40083, vdb.getName(), vdb.getVersion(), vdbImport.getName(), vdbImport.getVersion()));
 			}
 			VDBMetaData childVDB = importedVDB.getVDB();
+			newMergedVDB.getVisibilityOverrides().putAll(childVDB.getVisibilityOverrides());
 			toSearch[i++] = childVDB.getAttachment(ClassLoader.class);
 			this.children.put(new VDBKey(childVDB.getName(), childVDB.getVersion()), importedVDB);
 			
 			if (vdbImport.isImportDataPolicies()) {
-				for (DataPolicy role : importedVDB.getVDB().getDataPolicies()) {
-					if (newMergedVDB.addDataPolicy((DataPolicyMetadata)role) != null) {
+				for (DataPolicy dp : importedVDB.getVDB().getDataPolicies()) {
+					DataPolicyMetadata role = (DataPolicyMetadata)dp;
+					if (newMergedVDB.addDataPolicy(role) != null) {
 						throw new VirtualDatabaseException(RuntimePlugin.Event.TEIID40084, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40084, vdb.getName(), vdb.getVersion(), vdbImport.getName(), vdbImport.getVersion(), role.getName()));
+					}
+					if (role.isGrantAll()) {
+						role.setSchemas(childVDB.getModelMetaDatas().keySet());
 					}
 				}
 			}
 			
 			// add models
-			for (Model m:childVDB.getModels()) {
-				if (newMergedVDB.addModel((ModelMetaData)m) != null) {
+			for (ModelMetaData m:childVDB.getModelMetaDatas().values()) {
+				if (newMergedVDB.addModel(m) != null) {
 					throw new VirtualDatabaseException(RuntimePlugin.Event.TEIID40085, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40085, vdb.getName(), vdb.getVersion(), vdbImport.getName(), vdbImport.getVersion(), m.getName()));
 				}
 				newMergedVDB.getImportedModels().add(m.getName());
+				String visibilityOverride = newMergedVDB.getPropertyValue(m.getName() + ".visible"); //$NON-NLS-1$
+				if (visibilityOverride != null) {
+					boolean visible = Boolean.valueOf(visibilityOverride);
+					newMergedVDB.setVisibilityOverride(m.getName(), visible);
+				}
 			}
 			ConnectorManagerRepository childCmr = childVDB.getAttachment(ConnectorManagerRepository.class);
 			if (childCmr == null) {
@@ -211,15 +235,15 @@ public class CompositeVDB {
 		}
 		
 		LinkedHashMap<String, VDBResources.Resource> mergedvisibilityMap = new LinkedHashMap<String, VDBResources.Resource>();
-		if (this.visibilityMap != null) {
-			mergedvisibilityMap.putAll(this.visibilityMap);
-		}
 		for (CompositeVDB child:this.children.values()) {
 			LinkedHashMap<String, VDBResources.Resource> vm = child.getVisibilityMap();
 			if ( vm != null) {
 				mergedvisibilityMap.putAll(vm);
 			}
-		}		
+		}	
+		if (this.visibilityMap != null) {
+			mergedvisibilityMap.putAll(this.visibilityMap);
+		}
 		return mergedvisibilityMap;
 	}
 	
@@ -272,6 +296,20 @@ public class CompositeVDB {
 	
 	LinkedHashMap<VDBKey, CompositeVDB> getChildren() {
 		return children;
+	}
+
+	public Collection<Future<?>> clearTasks() {
+		ArrayList<Future<?>> copy = new ArrayList<Future<?>>(tasks);
+		tasks.clear();
+		return copy;
+	}
+
+	public void removeTask(Future<?> future) {
+		tasks.remove(future);
+	}
+
+	public void addTask(Future<?> future) {
+		tasks.add(future);
 	}
 	
 }

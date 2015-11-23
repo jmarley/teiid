@@ -310,6 +310,14 @@ public class TestTempTables extends TempTableTestHarness {
 		execute("select * from x where e2 = 3", new List[] {Arrays.asList("a", 3)}); //$NON-NLS-1$
 	}
 	
+	@Test public void testCompareLessThan() throws Exception {
+		execute("create local temporary table x (e1 string, e2 integer, primary key (e2))", new List[] {Arrays.asList(0)}); //$NON-NLS-1$
+		execute("insert into x (e2, e1) values (3, 'a')", new List[] {Arrays.asList(1)}); //$NON-NLS-1$
+		execute("insert into x (e2, e1) values (4, 'a')", new List[] {Arrays.asList(1)}); //$NON-NLS-1$
+		ProcessorPlan plan = execute("select * from x where e2 < 4", new List[] {Arrays.asList("a", 3)}); //$NON-NLS-1$
+		TestOptimizer.checkAtomicQueries(new String[] {"SELECT x.e1, x.e2 FROM x WHERE x.e2 < 4"}, plan);
+	}
+	
 	@Test public void testLikeWithIndex() throws Exception {
 		execute("create local temporary table x (e1 string, e2 integer, primary key (e1))", new List[] {Arrays.asList(0)}); //$NON-NLS-1$
 		execute("insert into x (e2, e1) values (3, 'a')", new List[] {Arrays.asList(1)}); //$NON-NLS-1$
@@ -465,7 +473,7 @@ public class TestTempTables extends TempTableTestHarness {
 		execute("insert into x1 (e3, e2, e1) values (5, 2, '1')", new List[] {Arrays.asList(1)}); //$NON-NLS-1$
 		execute("insert into x1 (e3, e2, e1) values (5, 1, '2')", new List[] {Arrays.asList(1)}); //$NON-NLS-1$
 		//ensure predicates are preserved
-		execute("select x.e1 from /*+ makenotdep */ x inner join  /*+ makenotdep */ x1 on x.e1 = x1.e1 and upper(x.e1) = x1.e2", new List[] {Arrays.asList("1"), Arrays.asList("2")}); //$NON-NLS-1$
+		execute("select x.e1, upper(x.e1),  x1.e2 from /*+ makenotdep */ x inner join  /*+ makenotdep */ x1 on x.e1 = x1.e1 and upper(x.e1) = x1.e2", new List[0]); //$NON-NLS-1$
 		execute("select x.e1 from /*+ makenotdep */ x inner join  /*+ makenotdep */ x1 on x.e1 = x1.e1 and upper(x.e1) = x1.e2 and x1.e3 = x.e3", new List[0]); //$NON-NLS-1$
 		//ensure there's no bad interaction with makedep
 		execute("select x.e1 from /*+ makedep */ x inner join  x1 on x.e1 = x1.e1 and x.e2 = x1.e2", new List[] {Arrays.asList("1")}); //$NON-NLS-1$
@@ -576,6 +584,28 @@ public class TestTempTables extends TempTableTestHarness {
 		
 		//multiple out of order values
 		execute("select x.e1 from x inner join /*+ makeind */ x1 on x.e3 = x1.e3 and x.e2 = x1.e2", new List[] {Arrays.asList("2"), Arrays.asList("1")}); //$NON-NLS-1$
+	}
+	
+	@Test public void testSubquery() throws Exception {
+		execute("create local temporary table x (e1 string, e2 integer, e3 integer, primary key (e2, e3))", new List[] {Arrays.asList(0)}); //$NON-NLS-1$
+
+		execute("insert into x (e3, e2, e1) values (4, 2, 'a')", new List[] {Arrays.asList(1)}); //$NON-NLS-1$
+		execute("insert into x (e3, e2, e1) values (4, 3, '1')", new List[] {Arrays.asList(1)}); //$NON-NLS-1$
+
+		execute("update x set e1 = 1 where e1 in (select e1 from pm1.g1)", new List[] {Arrays.asList(1)}); //$NON-NLS-1$
+		
+	}
+	
+	@Test public void testIndexInPredicate() throws Exception {
+		execute("create local temporary table x (e1 string, e2 integer, primary key (e1))", new List[] {Arrays.asList(0)}); //$NON-NLS-1$
+
+		//the issue is only apparent when the values are from different pages
+		for (int i = 0; i < 2048; i++) {
+			execute("insert into x (e2, e1) values ("+i+", '"+i+"')", new List[] {Arrays.asList(1)}); //$NON-NLS-1$
+		}
+
+		execute("select e2, e1 from x where e1 in ('2000', '1')", new List[] {Arrays.asList(1, "1"), Arrays.asList(2000, "2000")}); //$NON-NLS-1$
+		
 	}
 	
 }

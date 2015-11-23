@@ -24,7 +24,6 @@ package org.teiid.odata;
 import java.io.IOException;
 import java.sql.Array;
 import java.sql.Clob;
-import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
@@ -48,23 +47,20 @@ import org.odata4j.core.OObject;
 import org.odata4j.core.OProperties;
 import org.odata4j.core.OProperty;
 import org.odata4j.core.OSimpleObjects;
-import org.odata4j.edm.EdmCollectionType;
-import org.odata4j.edm.EdmComplexType;
-import org.odata4j.edm.EdmDataServices;
-import org.odata4j.edm.EdmEntitySet;
-import org.odata4j.edm.EdmEntityType;
-import org.odata4j.edm.EdmProperty;
-import org.odata4j.edm.EdmSimpleType;
-import org.odata4j.edm.EdmType;
+import org.odata4j.edm.*;
 import org.odata4j.exceptions.NotFoundException;
 import org.odata4j.exceptions.ServerErrorException;
+import org.odata4j.internal.EdmDataServicesDecorator;
 import org.odata4j.producer.BaseResponse;
 import org.odata4j.producer.CountResponse;
 import org.odata4j.producer.InlineCount;
 import org.odata4j.producer.QueryInfo;
 import org.odata4j.producer.Responses;
+import org.teiid.adminapi.Model;
 import org.teiid.adminapi.impl.VDBMetaData;
 import org.teiid.common.buffer.impl.BufferManagerImpl;
+import org.teiid.core.TeiidRuntimeException;
+import org.teiid.core.types.BinaryType;
 import org.teiid.core.types.BlobType;
 import org.teiid.core.types.ClobType;
 import org.teiid.core.types.DataTypeManager;
@@ -80,6 +76,7 @@ import org.teiid.jdbc.TeiidDriver;
 import org.teiid.logging.LogConstants;
 import org.teiid.logging.LogManager;
 import org.teiid.metadata.MetadataStore;
+import org.teiid.metadata.Schema;
 import org.teiid.net.TeiidURL;
 import org.teiid.odbc.ODBCServerRemoteImpl;
 import org.teiid.query.metadata.TransformationMetadata;
@@ -97,15 +94,14 @@ public class LocalClient implements Client {
 	private static final String BATCH_SIZE = "batch-size"; //$NON-NLS-1$
 	private static final String SKIPTOKEN_TIME = "skiptoken-cache-time"; //$NON-NLS-1$
 	static final String INVALID_CHARACTER_REPLACEMENT = "invalid-xml10-character-replacement"; //$NON-NLS-1$
-
-	private volatile MetadataStore metadataStore;
+	static final String DELIMITER = "--" ; //$NON-NLS-1$
+	
+	private volatile VDBMetaData vdb;
 	private String vdbName;
 	private int vdbVersion;
 	private int batchSize;
 	private long cacheTime;
-	private String transportName;
 	private String connectionString;
-	private Properties connectionProperties = new Properties();
 	private Properties initProperties;
 	private EdmDataServices edmMetaData;
 	private TeiidDriver driver = TeiidDriver.getInstance();
@@ -116,25 +112,47 @@ public class LocalClient implements Client {
 		this.vdbVersion = vdbVersion;
 		this.batchSize = PropertiesUtils.getIntProperty(props, BATCH_SIZE, BufferManagerImpl.DEFAULT_PROCESSOR_BATCH_SIZE);
 		this.cacheTime = PropertiesUtils.getLongProperty(props, SKIPTOKEN_TIME, 300000L);
-		this.transportName = props.getProperty(EmbeddedProfile.TRANSPORT_NAME, "odata"); //$NON-NLS-1$
 		this.invalidCharacterReplacement = props.getProperty(INVALID_CHARACTER_REPLACEMENT);
 		StringBuilder sb = new StringBuilder();
 		sb.append("jdbc:teiid:").append(this.vdbName).append(".").append(this.vdbVersion).append(";"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 		this.initProperties = props;
-		connectionProperties.put(TeiidURL.CONNECTION.PASSTHROUGH_AUTHENTICATION, "true"); //$NON-NLS-1$
-		connectionProperties.put(EmbeddedProfile.TRANSPORT_NAME, transportName); 
-		connectionProperties.put(EmbeddedProfile.WAIT_FOR_LOAD, "0"); //$NON-NLS-1$
+		if (this.initProperties.getProperty(TeiidURL.CONNECTION.PASSTHROUGH_AUTHENTICATION) == null) {
+		    this.initProperties.put(TeiidURL.CONNECTION.PASSTHROUGH_AUTHENTICATION, "true"); //$NON-NLS-1$    
+		}
+		if (this.initProperties.getProperty(EmbeddedProfile.TRANSPORT_NAME) == null) {
+		    this.initProperties.setProperty(EmbeddedProfile.TRANSPORT_NAME, "odata");    
+		}		 
+		if (this.initProperties.getProperty(EmbeddedProfile.WAIT_FOR_LOAD) == null) {
+		    this.initProperties.put(EmbeddedProfile.WAIT_FOR_LOAD, "0"); //$NON-NLS-1$
+		}
 		this.connectionString = sb.toString();
 	}
 	
 	@Override
-	public String getVDBName() {
-		return this.vdbName;
-	}
-
-	@Override
-	public int getVDBVersion() {
-		return this.vdbVersion;
+	public VDBMetaData getVDB() {
+        ConnectionImpl connection = null;
+        if (this.vdb == null) {
+            try {
+                connection = getConnection();
+                LocalServerConnection lsc = (LocalServerConnection)connection.getServerConnection();
+                VDBMetaData vdb = lsc.getWorkContext().getVDB();
+                if (vdb == null) {
+                    throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16001, this.vdbName, this.vdbVersion));
+                }
+                this.vdb = vdb;
+            } catch (SQLException e) {
+                throw new ServerErrorException(e.getMessage(),e);
+            } finally {
+                if (connection != null) {
+                    try {
+                        connection.close();
+                    } catch (SQLException e) {
+                        
+                    }
+                }
+            }
+        }
+        return this.vdb;
 	}
 	
 	public void setDriver(TeiidDriver driver) {
@@ -142,9 +160,9 @@ public class LocalClient implements Client {
 	}
 
 	ConnectionImpl getConnection() throws SQLException {
-		ConnectionImpl connection = driver.connect(this.connectionString, connectionProperties);
+		ConnectionImpl connection = driver.connect(this.connectionString, this.initProperties);
 		ODBCServerRemoteImpl.setConnectionProperties(connection);
-		ODBCServerRemoteImpl.setConnectionProperties(connection, initProperties);
+		ODBCServerRemoteImpl.setConnectionProperties(connection, this.initProperties);
 		return connection;
 	}
 
@@ -193,7 +211,7 @@ public class LocalClient implements Client {
             	OProperty prop = buildPropery("return", returnType, result, invalidCharacterReplacement); //$NON-NLS-1$
             	return Responses.property(prop); 
             }
-			return Responses.simple(EdmSimpleType.INT32, 1);
+			return null;
 		} catch (Exception e) {
 			throw new ServerErrorException(e.getMessage(), e);
 		} finally {
@@ -208,41 +226,19 @@ public class LocalClient implements Client {
 
 	@Override
 	public MetadataStore getMetadataStore() {
-		ConnectionImpl connection = null;
-		if (this.metadataStore == null) {
-			try {
-				connection = getConnection();
-				LocalServerConnection lsc = (LocalServerConnection)connection.getServerConnection();
-				VDBMetaData vdb = lsc.getWorkContext().getVDB();
-				if (vdb == null) {
-					throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16001, this.vdbName, this.vdbVersion));
-				}
-				this.metadataStore = vdb.getAttachment(TransformationMetadata.class).getMetadataStore();
-			} catch (SQLException e) {
-				throw new ServerErrorException(e.getMessage(),e);
-			} finally {
-				if (connection != null) {
-					try {
-						connection.close();
-					} catch (SQLException e) {
-						
-					}
-				}
-			}
-		}
-		return this.metadataStore;
+		return getVDB().getAttachment(TransformationMetadata.class).getMetadataStore();
 	}
-
 
 	@Override
 	public EntityList executeSQL(Query query, List<SQLParam> parameters, EdmEntitySet entitySet, LinkedHashMap<String, Boolean> projectedColumns, QueryInfo queryInfo) {
-		Connection connection = null;
+	    ConnectionImpl connection = null;
 		try {
 			boolean cache = queryInfo != null && this.batchSize > 0; 
 			if (cache) {
 				CacheHint hint = new CacheHint();
 				hint.setTtl(this.cacheTime);
 				hint.setScope(CacheDirective.Scope.USER);
+				hint.setMinRows(Long.valueOf(this.batchSize));
 				query.setCacheHint(hint);
 			}
 			
@@ -259,11 +255,24 @@ public class LocalClient implements Client {
 				}
 			}
 
-			String sql = query.toString();
-
-			LogManager.logDetail(LogConstants.CTX_ODATA, "Teiid-Query:",sql); //$NON-NLS-1$
-
 			connection = getConnection();
+			String sessionId = connection.getServerConnection().getLogonResult().getSessionID();
+			
+			String skipToken = null;			
+			if (queryInfo != null && queryInfo.skipToken != null) {
+			    skipToken = queryInfo.skipToken;
+			    if (cache) {
+    			    int idx = queryInfo.skipToken.indexOf(DELIMITER);
+    			    sessionId = queryInfo.skipToken.substring(0, idx);
+    			    skipToken = queryInfo.skipToken.substring(idx+2);
+			    }
+			}
+			String sql = query.toString();
+			if (cache) {
+			    sql += " /* "+ sessionId +" */"; //$NON-NLS-1$ //$NON-NLS-2$
+			}
+			LogManager.logDetail(LogConstants.CTX_ODATA, "Teiid-Query:",sql); //$NON-NLS-1$
+			
 			final PreparedStatement stmt = connection.prepareStatement(sql, cache?ResultSet.TYPE_SCROLL_INSENSITIVE:ResultSet.TYPE_FORWARD_ONLY, ResultSet.CONCUR_READ_ONLY);
 			if (parameters!= null && !parameters.isEmpty()) {
 				for (int i = 0; i < parameters.size(); i++) {
@@ -299,8 +308,8 @@ public class LocalClient implements Client {
 				skipSize = queryInfo.skip;
 			}
 			//skip based upon the skipToken
-			if (queryInfo != null && queryInfo.skipToken != null) {
-				skipSize += Integer.parseInt(queryInfo.skipToken);
+			if (skipToken != null) {
+				skipSize += Integer.parseInt(skipToken);
 			}
 			if (skipSize > 0) {
 				count += skip(cache, rs, skipSize);
@@ -321,10 +330,10 @@ public class LocalClient implements Client {
 			
 			//build the results
 			for (int i = 0; i < size; i++) {
-				count++;
 				if (!rs.next()) {
 					break;
 				}
+				count++;
 				result.addEntity(rs, propertyTypes, projectedColumns, entitySet);
 			}
 			
@@ -346,10 +355,10 @@ public class LocalClient implements Client {
 				int end = skipSize + result.size();
 				if (getCount) {
 					if (end < Math.min(top, count)) {
-						result.setSkipToken(String.valueOf(end));
+						result.setNextToken(nextToken(cache, sessionId, end));
 					}
 				} else if (rs.next()) {
-					result.setSkipToken(String.valueOf(end));
+				    result.setNextToken(nextToken(cache, sessionId, end));
 					//will force the entry to cache or is effectively a no-op when already cached
 					rs.last();	
 				}
@@ -366,7 +375,14 @@ public class LocalClient implements Client {
 			}
 		}
 	}
-
+	
+	private String nextToken(boolean cache, String sessionid, int skip) {
+	    if (cache) {
+	        return sessionid+DELIMITER+String.valueOf(skip);
+	    }
+	    return String.valueOf(skip);
+	}
+	
 	private int skip(boolean cache, final ResultSet rs, int skipSize)
 			throws SQLException {
 		int skipped = 0;
@@ -472,10 +488,101 @@ public class LocalClient implements Client {
 	@Override
 	public EdmDataServices getMetadata() {
 		if (this.edmMetaData == null) {
-			this.edmMetaData = ODataEntitySchemaBuilder.buildMetadata(getMetadataStore());
+			this.edmMetaData = buildMetadata(getVDB(), getMetadataStore());
 		}
 		return this.edmMetaData;
 	}
+	
+    public static EdmDataServices buildMetadata(VDBMetaData vdb, MetadataStore metadataStore) {
+        try {
+            List<EdmSchema.Builder> edmSchemas = new ArrayList<EdmSchema.Builder>();
+            for (Schema schema:metadataStore.getSchemaList()) {
+                if (isVisible(vdb, schema)) {
+                    ODataEntitySchemaBuilder.buildEntityTypes(schema, edmSchemas, false);
+                }
+            }
+            for (Schema schema:metadataStore.getSchemaList()) {
+                if (isVisible(vdb, schema)) {
+                    ODataEntitySchemaBuilder.buildFunctionImports(schema, edmSchemas, false);
+                }
+            }
+            for (Schema schema:metadataStore.getSchemaList()) {
+                if (isVisible(vdb, schema)) {
+                    ODataEntitySchemaBuilder.buildAssosiationSets(schema, edmSchemas, false);
+                }
+            }
+            final EdmDataServices edmDataServices = EdmDataServices.newBuilder().addSchemas(edmSchemas).build();
+            
+            EdmDataServicesDecorator decorator = new EdmDataServicesDecorator() {
+				
+				@Override
+				protected EdmDataServices getDelegate() {
+					return edmDataServices;
+				}
+				
+				public EdmEntitySet findEdmEntitySet(String entitySetName) {
+					int idx = entitySetName.indexOf('.');
+				    if (idx != -1) {
+				      EdmEntitySet ees = super.findEdmEntitySet(entitySetName);
+				      if (ees != null) {
+				    	  return ees;
+				      }
+				    }
+				    EdmEntitySet result = null;
+				    for (EdmSchema schema : this.getSchemas()) {
+				      for (EdmEntityContainer eec : schema.getEntityContainers()) {
+				        for (EdmEntitySet ees : eec.getEntitySets()) {
+				          if (ees.getName().equals(entitySetName)) {
+				        	  if (result != null) {
+				        		  throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16017, entitySetName));
+				        	  }
+				        	  result = ees;
+				          }
+				        }
+				      }
+				    }
+				    return result;
+				}
+				
+				public EdmFunctionImport findEdmFunctionImport(String functionImportName) {
+					int idx = functionImportName.indexOf('.');
+				    if (idx != -1) {
+				      EdmFunctionImport efi = super.findEdmFunctionImport(functionImportName);
+				      if (efi != null) {
+				        return efi;
+				      }
+				    }    
+				    EdmFunctionImport result = null;
+				    for (EdmSchema schema : this.getSchemas()) {
+				      for (EdmEntityContainer eec : schema.getEntityContainers()) {
+				        for (EdmFunctionImport efi : eec.getFunctionImports()) {
+				          if (efi.getName().equals(functionImportName)) {
+				        	  if (result != null) {
+				        		  throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16017, functionImportName));
+				        	  }
+				              result = efi;
+				          }
+				        }
+				      }
+				    }
+				    return result;
+				}
+			};
+
+            return decorator;
+        } catch (Exception e) {
+            throw new TeiidRuntimeException(e);
+        }
+    }	
+    
+    private static boolean isVisible(VDBMetaData vdb, Schema schema) {
+        String schemaName = schema.getName();
+        Model model = vdb.getModel(schemaName);
+        if (model == null) {
+            return true;
+        }
+        return model.isVisible();
+    }
 	
 	static OProperty<?> buildPropery(String propName, EdmType type, Object value, String invalidCharacterReplacement) throws TransformationException, SQLException, IOException {
 		if (!(type instanceof EdmSimpleType)) {
@@ -517,8 +624,12 @@ public class LocalClient implements Client {
 					return OProperties.binary(propName, ((SQLXML)value).getString().getBytes());
 				}
 			}
+			value = DataTypeManager.convertToRuntimeType(value, true);
 			value = t!=null?t.transform(value, targetType):value;
 			value = replaceInvalidCharacters(expectedType, value, invalidCharacterReplacement);
+			if (value instanceof BinaryType) {
+				value = ((BinaryType)value).getBytesDirect();
+			}
 			return OProperties.simple(propName, expectedType, value);
 		}
 		value = replaceInvalidCharacters(expectedType, value, invalidCharacterReplacement);

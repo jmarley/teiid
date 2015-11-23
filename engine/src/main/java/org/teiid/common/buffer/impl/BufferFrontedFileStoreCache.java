@@ -560,6 +560,10 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 	
 	@Override
 	public void initialize() throws TeiidComponentException {
+		initialize(true);
+	}
+	
+	void initialize(boolean allocateMemory) throws TeiidComponentException {
 		storageManager.initialize();
 		memoryBufferSpace = Math.max(memoryBufferSpace, maxStorageObjectSize);
 		blocks = (int) Math.min(Integer.MAX_VALUE, (memoryBufferSpace>>LOG_BLOCK_SIZE)*ADDRESSES_PER_BLOCK/(ADDRESSES_PER_BLOCK+1));
@@ -570,7 +574,7 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 		this.inodeByteBuffer = new BlockByteBuffer(30, blocks+1, LOG_INODE_SIZE, direct);
 		memoryWritePermits = new Semaphore(blocks);
 		maxMemoryBlocks = Math.min(MAX_DOUBLE_INDIRECT, blocks);
-		maxMemoryBlocks = Math.min(maxMemoryBlocks, maxStorageObjectSize>>LOG_BLOCK_SIZE + ((maxStorageObjectSize&BufferFrontedFileStoreCache.BLOCK_MASK)>0?1:0));
+		maxMemoryBlocks = Math.min(maxMemoryBlocks, (maxStorageObjectSize>>LOG_BLOCK_SIZE) + ((maxStorageObjectSize&BufferFrontedFileStoreCache.BLOCK_MASK)>0?1:0));
 		//try to maintain enough freespace so that writers don't block in cleaning
 		cleaningThreshold = Math.min(maxMemoryBlocks<<4, blocks>>1);
 		criticalCleaningThreshold = Math.min(maxMemoryBlocks<<2, blocks>>2);
@@ -583,10 +587,10 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 			maxMemoryBlocks -= (indirect/ADDRESSES_PER_BLOCK + (indirect%ADDRESSES_PER_BLOCK>0?1:0) + 1);
 		}
 		List<BlockStore> stores = new ArrayList<BlockStore>();
-		int size = BLOCK_SIZE;
+		long size = BLOCK_SIZE;
 		int files = 32; //this allows us to have 64 terabytes of smaller block sizes
 		do {
-			stores.add(new BlockStore(this.storageManager, size, 30, files));
+			stores.add(new BlockStore(this.storageManager, (int)size, 30, files));
 			size <<=1;
 			if (files > 1) {
 				files >>= 1;
@@ -631,7 +635,7 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 						if (!map.containsKey(entry.getId())) {
 							return true; //already removed
 						}
-						info = new PhysicalInfo(s.getId(), entry.getId(), EMPTY_ADDRESS, (int)readAttempts.get());
+						info = new PhysicalInfo(s.getId(), entry.getId(), EMPTY_ADDRESS, readAttempts.get());
 						info.adding = true;
 						map.put(entry.getId(), info);
 					}
@@ -748,6 +752,7 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 		if (serializer == null) {
 			return null;
 		}
+		readAttempts.incrementAndGet();
 		InputStream is = null;
 		Lock lock = null;
 		ExtensibleBufferedInputStream eis = null;
@@ -1079,7 +1084,7 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 		try {
 			for (int i = 0; i < EVICTION_SCANS && next == EMPTY_ADDRESS; i++) {
 				//doing a cleanup may trigger the purging of resources
-				AutoCleanupUtil.doCleanup();
+				AutoCleanupUtil.doCleanup(true);
 				//scan the eviction queue looking for a victim
 				Iterator<PhysicalInfo> iter = memoryBufferEntries.getEvictionQueue().iterator();
 				while (((!acquire && lowBlocks(false)) || (acquire && (next = blocksInuse.getAndSetNextClearBit()) == EMPTY_ADDRESS)) && iter.hasNext()) {
@@ -1168,6 +1173,9 @@ public class BufferFrontedFileStoreCache implements Cache<PhysicalInfo> {
 	}
 	
 	public void setMaxStorageObjectSize(int maxStorageBlockSize) {
+		if (maxStorageBlockSize > (1 << 30)) {
+			throw new TeiidRuntimeException("max storage block size cannot exceed 1 GB"); //$NON-NLS-1$
+		}
 		this.maxStorageObjectSize = maxStorageBlockSize;
 	}
 	

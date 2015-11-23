@@ -24,6 +24,7 @@ package org.teiid.jdbc;
 
 import java.io.Serializable;
 import java.lang.ref.WeakReference;
+import java.sql.Connection;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
 import java.sql.SQLException;
@@ -155,10 +156,13 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
     //Map<out/inout/return param index --> index in results>
     protected Map<Integer, Integer> outParamIndexMap = new HashMap<Integer, Integer>();
     protected Map<String, Integer> outParamByName = new TreeMap<String, Integer>(String.CASE_INSENSITIVE_ORDER);
+
+	private boolean closeOnCompletion;
     
     static Pattern TRANSACTION_STATEMENT = Pattern.compile("\\s*(commit|rollback|(start\\s+transaction))\\s*;?\\s*", Pattern.CASE_INSENSITIVE); //$NON-NLS-1$
-    static Pattern SET_STATEMENT = Pattern.compile("\\s*set(?:\\s+(payload))?\\s+((?:session authorization)|(?:[a-zA-Z]\\w*))\\s+(?:to\\s+)?((?:[^\\s]*)|(?:'[^']*')+)\\s*;?\\s*", Pattern.CASE_INSENSITIVE); //$NON-NLS-1$
-    static Pattern SHOW_STATEMENT = Pattern.compile("\\s*show\\s+([a-zA-Z]\\w*)\\s*;?\\s*?", Pattern.CASE_INSENSITIVE); //$NON-NLS-1$
+    static Pattern SET_STATEMENT = Pattern.compile("\\s*set(?:\\s+(payload))?\\s+((?:session authorization)|(?:[a-zA-Z]\\w*)|(?:\"[^\"]*\")+)\\s+(?:to\\s+)?((?:[^\\s]*)|(?:'[^']*')+)\\s*;?\\s*", Pattern.CASE_INSENSITIVE); //$NON-NLS-1$
+    static Pattern SET_CHARACTERISTIC_STATEMENT = Pattern.compile("\\s*set\\s+session\\s+characteristics\\s+as\\s+transaction\\s+isolation\\s+level\\s+((?:read\\s+(?:(?:committed)|(?:uncommitted)))|(?:repeatable\\s+read)|(?:serializable))\\s*", Pattern.CASE_INSENSITIVE); //$NON-NLS-1$
+    static Pattern SHOW_STATEMENT = Pattern.compile("\\s*show\\s+([a-zA-Z]\\w*|(?:\"[^\"]*\")+)\\s*;?\\s*?", Pattern.CASE_INSENSITIVE); //$NON-NLS-1$
     
     /**
      * MMStatement Constructor.
@@ -219,8 +223,10 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
         this.annotations = null;
 
         if ( this.resultSet != null ) {
-            this.resultSet.close();
-            this.resultSet = null;
+        	ResultSet rs = this.resultSet;
+        	this.resultSet = null;
+            rs.close();
+            checkStatement();
         }
 
         this.serverWarnings = null;
@@ -273,8 +279,10 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
 
         // close the the server's statement object (if necessary)
         if(resultSet != null) {
-            resultSet.close();
-            resultSet = null;
+        	ResultSet rs = this.resultSet;
+        	resultSet = null;
+            rs.close();
+            
         }
 
         isClosed = true;
@@ -282,7 +290,9 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
         // Remove link from connection to statement
         this.driverConnection.closeStatement(this);
 
-        logger.fine(JDBCPlugin.Util.getString("MMStatement.Close_stmt_success")); //$NON-NLS-1$
+        if (logger.isLoggable(Level.FINE)) {
+        	logger.fine(JDBCPlugin.Util.getString("MMStatement.Close_stmt_success")); //$NON-NLS-1$
+        }
     }
 
     /**
@@ -292,7 +302,8 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
      */
     protected void checkStatement() throws TeiidSQLException {
         //Check to see the connection is closed and proceed if it is not
-        if ( isClosed ) {
+    	driverConnection.checkConnection();
+        if ( isClosed) {
             throw new TeiidSQLException(JDBCPlugin.Util.getString("MMStatement.Stmt_closed")); //$NON-NLS-1$
         }
     }
@@ -424,9 +435,10 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
         		if (resultsMode == ResultsMode.RESULTSET) {
         			throw new TeiidSQLException(JDBCPlugin.Util.getString("StatementImpl.set_result_set")); //$NON-NLS-1$
         		}
-        		String key = match.group(2);
+        		String val = match.group(2);
+        		String key = unescapeId(val);
         		String value = match.group(3);
-        		if (value != null && value.startsWith("\'") && value.endsWith("\'")) { //$NON-NLS-1$
+        		if (value != null && value.startsWith("\'") && value.endsWith("\'")) { //$NON-NLS-1$ //$NON-NLS-2$
         			value = value.substring(1, value.length() - 1);
         			value = StringUtil.replaceAll(value, "''", "'"); //$NON-NLS-1$ //$NON-NLS-2$
         		}
@@ -438,7 +450,7 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
         				this.getMMConnection().setPayload(p);
         			}
         			p.setProperty(key, value);
-        		} else if ("SESSION AUTHORIZATION".equalsIgnoreCase(key)) { //$NON-NLS-1$
+        		} else if (val == key && "SESSION AUTHORIZATION".equalsIgnoreCase(key)) { //$NON-NLS-1$
         			this.getMMConnection().changeUser(value, this.getMMConnection().getPassword());
         		} else if (key.equalsIgnoreCase(TeiidURL.CONNECTION.PASSWORD)) {
         			this.getMMConnection().setPassword(value);
@@ -449,6 +461,21 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
         		} else {
         			this.driverConnection.setExecutionProperty(key, value);
         		}
+        		this.updateCounts = new int[] {0};
+        		return booleanFuture(false);
+        	}
+        	match = SET_CHARACTERISTIC_STATEMENT.matcher(commands[0]);
+        	if (match.matches()) {
+        		String value = match.group(1);
+				if (StringUtil.endsWithIgnoreCase(value, "uncommitted")) { //$NON-NLS-1$
+					this.getMMConnection().setTransactionIsolation(Connection.TRANSACTION_READ_UNCOMMITTED);
+				} else if (StringUtil.endsWithIgnoreCase(value, "committed")) { //$NON-NLS-1$
+					this.getMMConnection().setTransactionIsolation(Connection.TRANSACTION_READ_COMMITTED);
+				} else if (StringUtil.startsWithIgnoreCase(value, "repeatable")) { //$NON-NLS-1$
+					this.getMMConnection().setTransactionIsolation(Connection.TRANSACTION_REPEATABLE_READ);
+				} else if ("serializable".equalsIgnoreCase(value)) { //$NON-NLS-1$
+					this.getMMConnection().setTransactionIsolation(Connection.TRANSACTION_SERIALIZABLE);	
+				}        		
         		this.updateCounts = new int[] {0};
         		return booleanFuture(false);
         	}
@@ -542,9 +569,18 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
     	return result;
     }
 
+	private String unescapeId(String key) {
+		if (key.startsWith("\"")) { //$NON-NLS-1$
+			key = key.substring(1, key.length() - 1);
+			key = StringUtil.replaceAll(key, "\"\"", "\""); //$NON-NLS-1$ //$NON-NLS-2$
+		}
+		return key;
+	}
+
 	ResultsFuture<Boolean> executeShow(Matcher match)
 			throws SQLException {
 		String show = match.group(1);
+		show = unescapeId(show);
 		if (show.equalsIgnoreCase("PLAN")) { //$NON-NLS-1$
 			List<ArrayList<Object>> records = new ArrayList<ArrayList<Object>>(1);
 			PlanNode plan = driverConnection.getCurrentPlanDescription();
@@ -619,7 +655,7 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
         reqMsg.setExecutionId(this.currentRequestID);
         
         ResultsFuture.CompletionListener<ResultsMessage> compeletionListener = null;
-		if (queryTimeoutMS > 0 && !synch) {
+		if (queryTimeoutMS > 0 && (!synch || this.driverConnection.getServerConnection().isLocal())) {
 			final Task c = cancellationTimer.add(cancelTask, queryTimeoutMS);
 			compeletionListener = new ResultsFuture.CompletionListener<ResultsMessage>() {
 				@Override
@@ -672,6 +708,8 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
             accumulateWarnings(resultsWarning);
         }
         
+        resultsMsg.processResults();
+        
         if (resultsMsg.isUpdateResult()) {
         	List<? extends List<?>> results = resultsMsg.getResultsList();
         	if (resultsMsg.getUpdateCount() == -1) { 
@@ -698,7 +736,9 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
             createResultSet(resultsMsg);
         }
         
-        logger.fine(JDBCPlugin.Util.getString("MMStatement.Success_query", reqMessage.getCommandString())); //$NON-NLS-1$
+        if (logger.isLoggable(Level.FINE)) {
+        	logger.fine(JDBCPlugin.Util.getString("MMStatement.Success_query", reqMessage.getCommandString())); //$NON-NLS-1$
+        }
 	}
 
 	protected RequestMessage createRequestMessage(String[] commands,
@@ -1153,10 +1193,10 @@ public class StatementImpl extends WrapperImpl implements TeiidStatement {
 	}
 
 	public void closeOnCompletion() throws SQLException {
-		throw SqlUtil.createFeatureNotSupportedException();
+		this.closeOnCompletion = true;
 	}
 
 	public boolean isCloseOnCompletion() throws SQLException {
-		return false;
+		return closeOnCompletion;
 	}
 }

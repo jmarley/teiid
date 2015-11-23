@@ -21,6 +21,8 @@
  */
 package org.teiid.translator.solr;
 
+import static org.teiid.language.visitor.SQLStringVisitor.*;
+
 import java.util.ArrayList;
 import java.util.Iterator;
 import java.util.List;
@@ -87,7 +89,7 @@ public class SolrUpdateExecution implements UpdateExecution {
 	private void performUpdate(Delete obj) throws TranslatorException {
 		Table table = obj.getTable().getMetadataObject();
 		KeyRecord pk = table.getPrimaryKey();
-		final String id = pk.getColumns().get(0).getName();
+		final String id = getRecordName(pk.getColumns().get(0));
 
 		if (obj.getParameterValues() != null) {
 			throw new TranslatorException(SolrPlugin.Event.TEIID20008, SolrPlugin.Util.gs(SolrPlugin.Event.TEIID20008));
@@ -144,15 +146,15 @@ public class SolrUpdateExecution implements UpdateExecution {
 
 				int elementCount = obj.getChanges().size();
 				for (int i = 0; i < elementCount; i++) {
-					Column column = obj.getChanges().get(i).getSymbol().getMetadataObject();
+					String columnName = SolrSQLHierarchyVistor.getColumnName(obj.getChanges().get(i).getSymbol());
 					Literal value = (Literal)obj.getChanges().get(i).getValue();
-					updateDoc.setField(column.getName(), value.getValue());
+					updateDoc.setField(columnName, value.getValue());
 				}
 				request.add(updateDoc);
 			}
 		});
 				
-		if (!request.getDocuments().isEmpty()){
+		if (request.getDocuments() != null && !request.getDocuments().isEmpty()){
 			UpdateResponse response = this.connection.update(request);
 			if (response.getStatus() != 0) {
 				throw new TranslatorException(SolrPlugin.Event.TEIID20004, SolrPlugin.Util.gs(SolrPlugin.Event.TEIID20004, response.getStatus()));
@@ -168,10 +170,10 @@ public class SolrUpdateExecution implements UpdateExecution {
 			SolrInputDocument doc = new SolrInputDocument();
 			List<Expression> values = ((ExpressionValueSource)insert.getValueSource()).getValues();
 			for (int i = 0; i < columns.size(); i++) {
-				Column column = columns.get(i).getMetadataObject();			
+				String columnName = SolrSQLHierarchyVistor.getColumnName(columns.get(i));
 				Object value = values.get(i);
 				if (value instanceof Literal) {
-					doc.addField(column.getName(), ((Literal)value).getValue());
+					doc.addField(columnName, ((Literal)value).getValue());
 				}
 				else {
 					throw new TranslatorException(SolrPlugin.Event.TEIID20002, SolrPlugin.Util.gs(SolrPlugin.Event.TEIID20002));
@@ -210,8 +212,8 @@ public class SolrUpdateExecution implements UpdateExecution {
 				List<?> arg = args.next();
 				SolrInputDocument doc = new SolrInputDocument();
 				for (int i = 0; i < columns.size(); i++) {
-					Column column = columns.get(i).getMetadataObject();			
-					doc.addField(column.getName(), arg.get(i));
+					String columnName = SolrSQLHierarchyVistor.getColumnName(columns.get(i));
+					doc.addField(columnName, arg.get(i));
 				}
 				this.updateCount++;
 				request.add(doc);
@@ -224,7 +226,7 @@ public class SolrUpdateExecution implements UpdateExecution {
 					request = new UpdateRequest();
 				}
 			}
-			if (!request.getDocuments().isEmpty()) {
+			if (request.getDocuments()!= null && !request.getDocuments().isEmpty()) {
 				// write the mutation
 				UpdateResponse response = this.connection.update(request);
 				if (response.getStatus() != 0) {
@@ -237,12 +239,13 @@ public class SolrUpdateExecution implements UpdateExecution {
 	private Select buildSelectQuery(Insert insert) throws TranslatorException {
 		Table table = insert.getTable().getMetadataObject();
 		KeyRecord pk = table.getPrimaryKey();
-		final String id = pk.getColumns().get(0).getName();
+		final String id = getRecordName(pk.getColumns().get(0));
 		
 		NamedTable g = insert.getTable(); 
         List<DerivedColumn> symbols = new ArrayList<DerivedColumn>();
         for (Column column:table.getColumns()){
-        	symbols.add(new DerivedColumn(column.getName(), new ColumnReference(g, column.getName(), column, column.getJavaType()))); 	
+        	String columnName = getRecordName(column);
+        	symbols.add(new DerivedColumn(columnName, new ColumnReference(g, columnName, column, column.getJavaType()))); 	
         }
         
         List groups = new ArrayList();
@@ -259,9 +262,9 @@ public class SolrUpdateExecution implements UpdateExecution {
 		List<ColumnReference> columns = insert.getColumns();
 		List<Expression> values = ((ExpressionValueSource)insert.getValueSource()).getValues();
 		for (int i = 0; i < columns.size(); i++) {
-			Column column = columns.get(i).getMetadataObject();			
+			String columnName = SolrSQLHierarchyVistor.getColumnName(columns.get(i));
 			Object value = values.get(i);
-			if (column.getName().equals(pk)){
+			if (columnName.equals(pk)){
 				if (value instanceof Literal) {
 					return (Literal)value;
 				}

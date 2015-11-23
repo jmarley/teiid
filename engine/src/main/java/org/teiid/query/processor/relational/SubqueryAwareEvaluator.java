@@ -25,6 +25,7 @@ package org.teiid.query.processor.relational;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -32,6 +33,7 @@ import java.util.Map;
 
 import org.teiid.adminapi.impl.ModelMetaData;
 import org.teiid.adminapi.impl.VDBMetaData;
+import org.teiid.api.exception.query.ExpressionEvaluationException;
 import org.teiid.api.exception.query.FunctionExecutionException;
 import org.teiid.common.buffer.BlockedException;
 import org.teiid.common.buffer.BufferManager;
@@ -188,11 +190,13 @@ public class SubqueryAwareEvaluator extends Evaluator {
 		ProcessorPlan plan;
 		List<Object> refValues;
 		boolean comparable = true;
+		public boolean blocked;
 		
 		void close(boolean removeBuffer) {
 			if (processor == null) {
 				return;
 			}
+			processor.requestCanceled();
 			processor.closeProcessing();
 			if (removeBuffer) {
 				collector.getTupleBuffer().remove();
@@ -213,6 +217,7 @@ public class SubqueryAwareEvaluator extends Evaluator {
 	private int currentTuples = 0;
 	
 	private Map<Function, ScalarSubquery> functionState;
+	private Map<List<?>, QueryProcessor> procedureState;
 	
 	public SubqueryAwareEvaluator(Map elements, ProcessorDataManager dataMgr,
 			CommandContext context, BufferManager manager) {
@@ -281,9 +286,6 @@ public class SubqueryAwareEvaluator extends Evaluator {
 		if (state.processor != null) {
 			Determinism determinism = state.processor.getContext().getDeterminismLevel();
 			deterministic = Determinism.COMMAND_DETERMINISTIC.compareTo(determinism) <= 0;
-			if (!deterministic) {
-				shouldClose = true;
-			}
 		}
 		boolean removeBuffer = true;
 		if (correlatedRefs != null) {
@@ -310,10 +312,11 @@ public class SubqueryAwareEvaluator extends Evaluator {
 		    				removeBuffer = false;
 		    				this.currentTuples += tb.getRowCount();
 		    				while (this.currentTuples > maxTuples && !cache.isEmpty()) {
-		    					Iterator<TupleBuffer> i = this.cache.values().iterator();
-		    					TupleBuffer buffer = i.next();
+		    					Iterator<Map.Entry<List<?>, TupleBuffer>> i = this.cache.entrySet().iterator();
+		    					Map.Entry<List<?>, TupleBuffer> entry = i.next();
+		    					TupleBuffer buffer = entry.getValue();
 		    					if (buffer.getRowCount() <= 2) {
-		    						this.smallCache.put(cacheKey, buffer);
+		    						this.smallCache.put(entry.getKey(), buffer);
 		    					} else {
 		    						buffer.remove();
 		    					}
@@ -338,9 +341,10 @@ public class SubqueryAwareEvaluator extends Evaluator {
             	shouldClose = true;
             }
 		}
-		if (shouldClose) {
+		if (shouldClose || (!deterministic && !state.blocked)) {
 			state.close(removeBuffer);
 		}
+		state.blocked = true;
 		if (state.processor == null) {
 			CommandContext subContext = context.clone();
 			state.plan.reset();
@@ -350,11 +354,59 @@ public class SubqueryAwareEvaluator extends Evaluator {
 	        }
 	        state.collector = state.processor.createBatchCollector();
 		}
-		return new TupleSourceValueIterator(state.collector.collectTuples().createIndexedTupleSource(), 0);
+		TupleSourceValueIterator iter = new TupleSourceValueIterator(state.collector.collectTuples().createIndexedTupleSource(), 0);
+		state.blocked = false;
+		return iter;
 	}
 	
 	/**
-	 * Implements must pushdown function hanlding if supported by the source.
+	 * Implements procedure function handling.
+	 * TODO: cache results
+	 */
+	@Override
+	protected Object evaluateProcedure(Function function, List<?> tuple,
+			Object[] values) throws TeiidComponentException, TeiidProcessingException {
+		QueryProcessor qp = null;
+		List<?> key = Arrays.asList(function, Arrays.asList(values));
+		if (procedureState != null) {
+			qp = this.procedureState.get(key); 
+		}
+		if (qp == null) {
+			String args = Collections.nCopies(values.length, '?').toString().substring(1);
+			args = args.substring(0, args.length() - 1);
+			String fullName = function.getFunctionDescriptor().getFullName();
+			String call = String.format("call %1$s(%2$s)", fullName, args); //$NON-NLS-1$
+			qp = this.context.getQueryProcessorFactory().createQueryProcessor(call, fullName, this.context, values);
+			if (this.procedureState == null) {
+				this.procedureState = new HashMap<List<?>, QueryProcessor>();
+			}
+			this.procedureState.put(key, qp);
+		}
+		
+		//just in case validate the rows being returned
+		TupleBatch tb = qp.nextBatch();
+		TupleBatch next = tb;
+		while (!next.getTerminationFlag()) {
+			if (next.getEndRow() >= 2) {
+				break;
+			}
+			next = qp.nextBatch();
+		}
+		if (next.getEndRow() >= 2) {
+			throw new ExpressionEvaluationException(QueryPlugin.Event.TEIID30345, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30345, function));
+		}
+		
+		Object result = null;
+		if (next.getRowCount() > 0) {
+			result = next.getTuples().get(0).get(0);
+		}
+		this.procedureState.remove(key);
+		qp.closeProcessing();
+	    return result;
+	}
+	
+	/**
+	 * Implements must pushdown function handling if supported by the source.
 	 * 
 	 * The basic strategy is to create a dummy subquery to represent the evaluation
 	 */

@@ -254,12 +254,9 @@ public final class RulePushSelectCriteria implements OptimizerRule {
         JoinType jt = (JoinType)joinNode.getProperty(NodeConstants.Info.JOIN_TYPE);
         
         if (jt == JoinType.JOIN_CROSS || jt == JoinType.JOIN_INNER) {
-            if (jt == JoinType.JOIN_CROSS) {
-                joinNode.setProperty(NodeConstants.Info.JOIN_TYPE, JoinType.JOIN_INNER);
-            }
             return moveCriteriaIntoOnClause(critNode, joinNode);
         }
-        JoinType optimized = JoinUtil.optimizeJoinType(critNode, joinNode, metadata);
+        JoinType optimized = JoinUtil.optimizeJoinType(critNode, joinNode, metadata, true);
         
         if (optimized == JoinType.JOIN_INNER) {
             moveCriteriaIntoOnClause(critNode, joinNode);
@@ -330,6 +327,10 @@ public final class RulePushSelectCriteria implements OptimizerRule {
     	if (criteria != null) {
     		joinCriteria.add(criteria);
     	}
+    	
+    	if (!joinCriteria.isEmpty() && joinNode.getProperty(Info.JOIN_TYPE) == JoinType.JOIN_CROSS) {
+            joinNode.setProperty(NodeConstants.Info.JOIN_TYPE, JoinType.JOIN_INNER);
+        }
         return moved;
     }
 
@@ -374,7 +375,7 @@ public final class RulePushSelectCriteria implements OptimizerRule {
 		
         NodeEditor.removeChildNode(critNode.getParent(), critNode);
         destination.addAsParent(critNode);
-        if (groupSelects && destination == sourceNode) {
+        if (groupSelects && destination == sourceNode && !critNode.hasBooleanProperty(Info.IS_TEMPORARY) && !destination.hasBooleanProperty(Info.IS_TEMPORARY)) {
         	//Help with the detection of composite keys in pushed criteria
         	RuleMergeCriteria.mergeChain(critNode, metadata);
         }
@@ -479,7 +480,7 @@ public final class RulePushSelectCriteria implements OptimizerRule {
                     //if we successfully optimized then this should no longer inhibit the criteria from being pushed
                     //since the criteria must then be on the outer side of an outer join or on either side of an inner join
 
-                    JoinType optimized = JoinUtil.optimizeJoinType(critNode, currentNode, metadata);
+                    JoinType optimized = JoinUtil.optimizeJoinType(critNode, currentNode, metadata, this.createdNodes == null);
                     
                     if (optimized == null || optimized.isOuter()) {
                         return currentNode;
@@ -732,6 +733,9 @@ public final class RulePushSelectCriteria implements OptimizerRule {
         if(critNode.hasBooleanProperty(NodeConstants.Info.IS_DEPENDENT_SET)) {
             copyNode.setProperty(NodeConstants.Info.IS_DEPENDENT_SET, Boolean.TRUE);
         }
+        if (critNode.hasBooleanProperty(NodeConstants.Info.IS_TEMPORARY)) {
+        	copyNode.setProperty(NodeConstants.Info.IS_TEMPORARY, Boolean.TRUE);
+        }
         if (createdNodes != null) {
         	createdNodes.add(copyNode);
         }
@@ -829,7 +833,7 @@ public final class RulePushSelectCriteria implements OptimizerRule {
         	Set<WindowFunction> windowFunctions = RuleAssignOutputElements.getWindowFunctions((List<Expression>) projectNode.getProperty(Info.PROJECT_COLS));
         	for (WindowFunction windowFunction : windowFunctions) {
 				WindowSpecification spec = windowFunction.getWindowSpecification();
-				if (spec.getOrderBy() != null || spec.getPartition() == null) {
+				if (spec.getPartition() == null) {
 					return null;
 				}
 				for (ElementSymbol col : cols) {

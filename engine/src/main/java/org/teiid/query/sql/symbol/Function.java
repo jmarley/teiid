@@ -38,10 +38,10 @@ import org.teiid.query.sql.visitor.SQLStringVisitor;
  * descriptor.
  */
 public class Function implements Expression {
-
+	
 	private String name;
 	private Expression[] args;
-	private Class<?> type;
+	protected Class<?> type;
 	private FunctionDescriptor descriptor;
 	private boolean implicit = false;
 	private boolean eval = true;

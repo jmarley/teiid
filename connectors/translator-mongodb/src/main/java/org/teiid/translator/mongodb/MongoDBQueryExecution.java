@@ -22,7 +22,6 @@
 package org.teiid.translator.mongodb;
 
 import java.util.ArrayList;
-import java.util.Iterator;
 import java.util.List;
 
 import org.teiid.language.QueryExpression;
@@ -41,7 +40,7 @@ import com.mongodb.*;
 public class MongoDBQueryExecution extends MongoDBBaseExecution implements ResultSetExecution {
 	private Select command;
 	private MongoDBExecutionFactory executionFactory;
-	private Iterator<DBObject> results;
+	private Cursor results;
 	private MongoDBSelectVisitor visitor;
 	private Class<?>[] expectedTypes;
 
@@ -70,21 +69,22 @@ public class MongoDBQueryExecution extends MongoDBBaseExecution implements Resul
 		if (collection != null) {
 			// TODO: check to see how to pass the hint
 			ArrayList<DBObject> ops = new ArrayList<DBObject>();
-			buildAggregate(ops, "$project", this.visitor.unwindProject); //$NON-NLS-1$
+
+			for (ProcessingNode ref:this.visitor.mergePlanner.getNodes()) {
+                buildAggregate(ops, ref.getInstruction()); 
+            }
 			
 			if (this.visitor.project.isEmpty()) {
 			    throw new TranslatorException(MongoDBPlugin.Event.TEIID18025, MongoDBPlugin.Util.gs(MongoDBPlugin.Event.TEIID18025));
 			}
 			
+			assert visitor.selectColumns.size() == visitor.selectColumnReferences.size();
+			
 			if (this.visitor.projectBeforeMatch) {
 				buildAggregate(ops, "$project", this.visitor.project); //$NON-NLS-1$
 			}
 
-			if (!this.visitor.unwindTables.isEmpty()) {
-				for (String ref:this.visitor.unwindTables) {
-					buildAggregate(ops, "$unwind", "$"+ref); //$NON-NLS-1$ //$NON-NLS-2$
-				}
-			}
+			
 			buildAggregate(ops, "$match", this.visitor.match); //$NON-NLS-1$
 
 			buildAggregate(ops, "$group", this.visitor.group); //$NON-NLS-1$
@@ -99,8 +99,7 @@ public class MongoDBQueryExecution extends MongoDBBaseExecution implements Resul
 			buildAggregate(ops, "$limit", this.visitor.limit); //$NON-NLS-1$
 
 			try {
-				AggregationOutput output = collection.aggregate(ops.remove(0), ops.toArray(new DBObject[ops.size()]));
-				this.results = output.results().iterator();
+                this.results = collection.aggregate(ops, this.executionFactory.getOptions(this.executionContext.getBatchSize()));
 			} catch (MongoException e) {
 				throw new TranslatorException(e);
 			}
@@ -109,10 +108,16 @@ public class MongoDBQueryExecution extends MongoDBBaseExecution implements Resul
 
 	private void buildAggregate(List<DBObject> query, String type, Object object) {
 		if (object != null) {
-			LogManager.logDetail(LogConstants.CTX_CONNECTOR, type+":"+object.toString()); //$NON-NLS-1$
+			LogManager.logDetail(LogConstants.CTX_CONNECTOR, "{\""+type+"\": {"+object.toString()+"}}"); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$ 
 			query.add(new BasicDBObject(type, object));
 		}
 	}
+	
+    private void buildAggregate(List<DBObject> query, DBObject dbObject) {
+        if (dbObject != null) {
+            query.add(dbObject);
+        }
+    }	
 
 	@Override
 	public List<?> next() throws TranslatorException, DataNotAvailableException {
@@ -131,7 +136,10 @@ public class MongoDBQueryExecution extends MongoDBBaseExecution implements Resul
 
 	@Override
 	public void close() {
-		this.results = null;
+	    if (this.results != null) {
+    		this.results.close();
+    		this.results = null;
+	    }
 	}
 
 	@Override

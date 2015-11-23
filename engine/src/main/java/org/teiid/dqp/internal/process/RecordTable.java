@@ -37,6 +37,7 @@ import org.teiid.core.TeiidProcessingException;
 import org.teiid.metadata.AbstractMetadataRecord;
 import org.teiid.query.eval.Evaluator;
 import org.teiid.query.metadata.CompositeMetadataStore;
+import org.teiid.query.metadata.TransformationMetadata;
 import org.teiid.query.processor.relational.RelationalNode;
 import org.teiid.query.sql.lang.Criteria;
 import org.teiid.query.sql.lang.OrderBy;
@@ -46,6 +47,7 @@ import org.teiid.query.sql.symbol.Expression;
 import org.teiid.query.sql.symbol.Function;
 import org.teiid.query.tempdata.BaseIndexInfo;
 import org.teiid.query.tempdata.SearchableTable;
+import org.teiid.query.util.CommandContext;
 
 abstract class RecordTable<T extends AbstractMetadataRecord> implements SearchableTable {
 	
@@ -163,7 +165,7 @@ abstract class RecordTable<T extends AbstractMetadataRecord> implements Searchab
 		return !(ex instanceof ElementSymbol);
 	}
 	
-	public abstract SimpleIterator<T> processQuery(final VDBMetaData vdb, CompositeMetadataStore metadataStore, BaseIndexInfo<?> ii);
+	public abstract SimpleIterator<T> processQuery(final VDBMetaData vdb, CompositeMetadataStore metadataStore, BaseIndexInfo<?> ii, TransformationMetadata metadata);
 	
 	public SimpleIterator<T> processQuery(final VDBMetaData vdb, NavigableMap<String, ?> map, BaseIndexInfo<?> ii) {
 		final Criteria crit = ii.getCoveredCriteria();
@@ -224,10 +226,10 @@ abstract class RecordTable<T extends AbstractMetadataRecord> implements Searchab
 		return (T) val;
 	}
 
-	public BaseIndexInfo<RecordTable<?>> planQuery(Query query, Criteria condition) {
+	public BaseIndexInfo<RecordTable<?>> planQuery(Query query, Criteria condition, CommandContext context) {
 		BaseIndexInfo<RecordTable<?>> info = new BaseIndexInfo<RecordTable<?>>(this, Collections.EMPTY_LIST, condition, null, false);
 		if (!info.getValueSet().isEmpty()) {
-			info.sortValueSet(OrderBy.ASC);
+			info.sortValueSet(OrderBy.ASC, context.getBufferManager().getOptions().getDefaultNullOrder());
 		}
 		return info;
 	}

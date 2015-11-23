@@ -26,7 +26,7 @@ import org.teiid.translator.Translator;
 import org.teiid.translator.WSConnection;
 import org.teiid.translator.odata.ODataExecutionFactory;
 
-@Translator(name="sap-nw-gateway", description="A translator for making OData data service calls to SAP Netweaver Gateway")
+@Translator(name="sap-gateway", description="A translator for making OData data service calls to SAP Gateway")
 public class SAPODataExecutionFactory extends ODataExecutionFactory {
 
 	public SAPODataExecutionFactory() {

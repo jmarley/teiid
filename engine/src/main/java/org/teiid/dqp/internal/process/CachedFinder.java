@@ -48,7 +48,9 @@ import org.teiid.translator.SourceSystemFunctions;
  */
 public class CachedFinder implements CapabilitiesFinder {
 
-	static BasicSourceCapabilities INVALID_CAPS = new BasicSourceCapabilities();
+	static class InvalidCaps extends BasicSourceCapabilities {
+		
+	};
 	private static BasicSourceCapabilities SYSTEM_CAPS = new BasicSourceCapabilities();
 	static {
 		SYSTEM_CAPS.setCapabilitySupport(Capability.CRITERIA_IN, true);
@@ -59,6 +61,7 @@ public class CachedFinder implements CapabilitiesFinder {
 		SYSTEM_CAPS.setCapabilitySupport(Capability.CRITERIA_LIKE_ESCAPE, true);
 		SYSTEM_CAPS.setCapabilitySupport(Capability.CRITERIA_LIKE_REGEX, true);
 		SYSTEM_CAPS.setCapabilitySupport(Capability.CRITERIA_SIMILAR, true);
+		SYSTEM_CAPS.setCapabilitySupport(Capability.NO_PROJECTION, true);
 		SYSTEM_CAPS.setFunctionSupport(SourceSystemFunctions.UCASE, true);
 		SYSTEM_CAPS.setSourceProperty(Capability.MAX_IN_CRITERIA_SIZE, 100000);
 		SYSTEM_CAPS.setSourceProperty(Capability.MAX_DEPENDENT_PREDICATES, 1);
@@ -94,6 +97,7 @@ public class CachedFinder implements CapabilitiesFinder {
         if (sourceNames.isEmpty()) {
         	throw new TeiidRuntimeException(QueryPlugin.Event.TEIID30499, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30499, modelName));
         }
+        TeiidException cause = null;
         for (String sourceName:sourceNames) {
         	//TOOD: in multi-source mode it may be necessary to compute minimal capabilities across the sources
         	ConnectorManager mgr = this.connectorRepo.getConnectorManager(sourceName);
@@ -104,12 +108,15 @@ public class CachedFinder implements CapabilitiesFinder {
         		caps = mgr.getCapabilities();
         		break;
             } catch(TeiidException e) {
+            	cause = e;
             	LogManager.logDetail(LogConstants.CTX_DQP, e, "Could not obtain capabilities for" + sourceName); //$NON-NLS-1$
             }
         }
 
         if (caps == null) {
-        	caps = INVALID_CAPS;
+        	InvalidCaps ic = new InvalidCaps();
+        	ic.setSourceProperty(Capability.INVALID_EXCEPTION, cause);
+        	caps = ic;
         }
         
         userCache.put(modelName, caps);
@@ -121,7 +128,8 @@ public class CachedFinder implements CapabilitiesFinder {
     }
     
     public boolean isValid(String modelName) {
-    	return userCache.get(modelName) != INVALID_CAPS;
+    	SourceCapabilities caps = userCache.get(modelName);
+    	return caps != null && !(caps instanceof InvalidCaps);
     }
         
 }

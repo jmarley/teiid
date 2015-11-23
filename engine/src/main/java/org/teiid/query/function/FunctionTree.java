@@ -37,8 +37,12 @@ import org.teiid.metadata.FunctionMethod;
 import org.teiid.metadata.FunctionMethod.PushDown;
 import org.teiid.metadata.FunctionParameter;
 import org.teiid.metadata.MetadataException;
+import org.teiid.metadata.MetadataFactory;
+import org.teiid.metadata.Procedure;
+import org.teiid.metadata.Schema;
 import org.teiid.query.QueryPlugin;
 import org.teiid.query.function.metadata.FunctionCategoryConstants;
+import org.teiid.query.parser.SQLParserUtil;
 import org.teiid.query.util.CommandContext;
 
 
@@ -60,7 +64,13 @@ public class FunctionTree {
 
     private Map<String, List<FunctionMethod>> functionsByName = new TreeMap<String, List<FunctionMethod>>(String.CASE_INSENSITIVE_ORDER);
     
+    private Map<String, FunctionMethod> functionsByUuid = new TreeMap<String, FunctionMethod>(String.CASE_INSENSITIVE_ORDER);
+    
+    private String schemaName;
+    
     private Set<FunctionMethod> allFunctions = new HashSet<FunctionMethod>();
+    
+    private int idCount;
 
 	/**
 	 * Function lookup and invocation use: Function name (uppercase) to Map (recursive tree)
@@ -82,6 +92,7 @@ public class FunctionTree {
      */
     public FunctionTree(String name, FunctionMetadataSource source, boolean validateClass) {
         // Load data structures
+    	this.schemaName = name;
     	this.validateClass = validateClass;
     	boolean system = CoreConstants.SYSTEM_MODEL.equalsIgnoreCase(name) || CoreConstants.SYSTEM_ADMIN_MODEL.equalsIgnoreCase(name);
         Collection<FunctionMethod> functions = source.getFunctionMethods();
@@ -94,6 +105,14 @@ public class FunctionTree {
 			}
         }
     }
+    
+    public String getSchemaName() {
+		return schemaName;
+	}
+    
+    public Map<String, FunctionMethod> getFunctionsByUuid() {
+		return functionsByUuid;
+	}
 
 	// ---------------------- FUNCTION SELECTION USE METHODS ----------------------
 
@@ -162,7 +181,7 @@ public class FunctionTree {
     		method.setCategory(FunctionCategoryConstants.MISCELLANEOUS);
     		categoryKey = FunctionCategoryConstants.MISCELLANEOUS;
     	}
-        
+        setUuid(method);
         // Look up function map (create if necessary)
         Set<FunctionMethod> functions = categories.get(categoryKey);
         if (functions == null) {
@@ -182,18 +201,20 @@ public class FunctionTree {
                 String typeName = inputParams.get(i).getType();
                 Class<?> clazz = DataTypeManager.getDataTypeClass(typeName);
                 types[i] = clazz;
+                setUuid(inputParams.get(i));
             }
         } else {
         	types = new Class<?>[0];
         }
+        
+        setUuid(method.getOutputParameter());
 
         FunctionDescriptor descriptor = createFunctionDescriptor(source, method, types, system);
         descriptor.setSchema(schema);
         // Store this path in the function tree
         // Look up function in function map
         functions.add(method);
-        
-        int index = -1;
+        functionsByUuid.put(method.getUUID(), method);        
         while(true) {
 	        // Add method to list by function name
 	        List<FunctionMethod> knownMethods = functionsByName.get(methodName);
@@ -230,7 +251,7 @@ public class FunctionTree {
 	        // Store the leaf descriptor in the tree
 	        node.put(DESCRIPTOR_KEY, descriptor);
 	        
-	        index = methodName.indexOf(AbstractMetadataRecord.NAME_DELIM_CHAR, index+1);
+	        int index = methodName.indexOf(AbstractMetadataRecord.NAME_DELIM_CHAR);
 	        if (index == -1) {
 	        	break;
 	        }
@@ -240,6 +261,24 @@ public class FunctionTree {
         allFunctions.add(method);
         return descriptor;
     }
+
+    /**
+     * Adapted from {@link MetadataFactory#setUUID}
+     * @param method
+     */
+	private void setUuid(AbstractMetadataRecord method) {
+		if (!method.isUUIDSet()) {
+        	int lsb = 0;
+    		if (method.getParent() != null) {
+    			lsb  = method.getParent().getUUID().hashCode();
+    		} else {
+    			lsb = CoreConstants.SYSTEM_MODEL.hashCode();
+    		}
+    		lsb = 31*lsb + method.getName().hashCode();
+    		String uuid = "tsid:"+MetadataFactory.hex(lsb, 16) + "-" + MetadataFactory.hex(idCount++, 8); //$NON-NLS-1$ //$NON-NLS-2$
+        	method.setUUID(uuid);
+        }
+	}
 
 	private FunctionDescriptor createFunctionDescriptor(
 			FunctionMetadataSource source, FunctionMethod method,
@@ -321,7 +360,8 @@ public class FunctionTree {
             }
         }
 
-        FunctionDescriptor result = new FunctionDescriptor(method, types, outputType, invocationMethod, requiresContext);
+        FunctionDescriptor result = new FunctionDescriptor(method, types, outputType, invocationMethod, requiresContext,
+                source.getClassLoader());
         if (method.getAggregateAttributes() != null && (method.getPushdown() == PushDown.CAN_PUSHDOWN || method.getPushdown() == PushDown.CANNOT_PUSHDOWN)) {
         	result.newInstance();
         }
@@ -364,5 +404,21 @@ public class FunctionTree {
         // No descriptor at this location in tree
         return null;
     }
+    
+    public static FunctionTree getFunctionProcedures(Schema schema) {
+		UDFSource dummySource = new UDFSource(Collections.EMPTY_LIST);
+		FunctionTree ft = null;
+		for (Procedure p : schema.getProcedures().values()) {
+			if (p.isFunction() && p.getQueryPlan() != null) {
+				if (ft == null) {
+					ft = new FunctionTree(schema.getName(), dummySource, false);
+				}
+				FunctionMethod fm = SQLParserUtil.createFunctionMethod(p);
+				FunctionDescriptor fd = ft.addFunction(schema.getName(), dummySource, fm, false);
+				fd.setProcedure(p);
+			}
+		}
+		return ft;
+	}
 
 }

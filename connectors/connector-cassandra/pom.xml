@@ -3,127 +3,45 @@
 	<parent>
 		<groupId>org.jboss.teiid</groupId>
 		<artifactId>connectors</artifactId>
-		<version>8.8.0.Beta2-SNAPSHOT</version>
+		<version>8.13.0.Alpha1-SNAPSHOT</version>
 	</parent>
     
 	<groupId>org.jboss.teiid.connectors</groupId>
 	<artifactId>connector-cassandra</artifactId>
 	<name>Cassandra Resource Adapter</name>
 	<description>Cassandra Resource Adapter</description>
-
+    <packaging>bundle</packaging>
+    
 	<dependencies>
 		<dependency>
 			<groupId>org.jboss.teiid</groupId>
 			<artifactId>teiid-api</artifactId>
-			<scope>provided</scope>
 		</dependency>
 		<dependency>
 			<groupId>org.jboss.teiid</groupId>
 			<artifactId>teiid-common-core</artifactId>
-			<scope>provided</scope>
 		</dependency>
-		<dependency>
-			<groupId>javax.resource</groupId>
-			<artifactId>connector-api</artifactId>
-			<scope>provided</scope>
-		</dependency>
+        <dependency>
+            <groupId>org.jboss.spec.javax.resource</groupId>
+            <artifactId>jboss-connector-api_1.7_spec</artifactId>
+        </dependency>
 		<dependency>
 			<groupId>com.datastax.cassandra</groupId>
 			<artifactId>cassandra-driver-core</artifactId>
-			<scope>provided</scope>
 		</dependency> 
 		<dependency>
             <groupId>org.jboss.teiid.connectors</groupId>
             <artifactId>translator-cassandra</artifactId>
-            <scope>provided</scope>
         </dependency>
 	</dependencies>
 
     <build>
         <plugins>
             <plugin>
-                <groupId>org.apache.felix</groupId>
-                <artifactId>maven-bundle-plugin</artifactId>
-                <extensions>true</extensions>
-                <executions>
-                    <execution>
-                        <id>bundle</id>
-                        <phase>process-classes</phase>
-                        <goals>
-                            <goal>bundle</goal>
-                        </goals>
-                    </execution>
-                </executions>
-                <configuration>
-                    <classifier>lib</classifier>
-                </configuration>
-            </plugin>        
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-rar-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>build_rar</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>rar</goal>
-                        </goals>
-                        <configuration>
-                            <finalName>${project.artifactId}-${project.version}</finalName>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-install-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>install_rar</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>install-file</goal>
-                        </goals>
-                        <configuration>
-                            <file> ${project.build.directory}/${project.artifactId}-${project.version}.rar</file>
-                            <artifactId>${project.artifactId}</artifactId>
-                            <groupId>${project.groupId}</groupId>
-                            <packaging>rar</packaging>
-                            <version>${project.version}</version>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
-                <groupId>org.apache.maven.plugins</groupId>
-                <artifactId>maven-dependency-plugin</artifactId>
-                <executions>
-                    <execution>
-                        <id>unpack</id>
-                        <phase>package</phase>
-                        <goals>
-                            <goal>unpack</goal>
-                        </goals>
-                        <configuration>
-                            <artifactItems>
-                                <artifactItem>
-                                    <groupId>${project.groupId}</groupId>
-                                    <artifactId>${project.artifactId}</artifactId>
-                                    <version>${project.version}</version>
-                                    <type>rar</type>
-                                    <overWrite>true</overWrite>
-                                    <outputDirectory>${project.build.directory}/rar-unpack</outputDirectory>
-                                </artifactItem>
-                            </artifactItems>
-                        </configuration>
-                    </execution>
-                </executions>
-            </plugin>
-            <plugin>
                 <artifactId>maven-assembly-plugin</artifactId>
                 <configuration>
                     <descriptors>
-                        <descriptor>kits/jboss-as7-dist.xml</descriptor>
+                        <descriptor>kits/wildfly-dist.xml</descriptor>
                         <descriptor>kits/embedded-dist.xml</descriptor>
                     </descriptors>
                 </configuration>

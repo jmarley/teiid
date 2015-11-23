@@ -61,7 +61,8 @@ public class TempMetadataID implements Serializable, Modifiable, DataModifiable 
 		List<TempMetadataID> primaryKey;
 		QueryNode queryNode;
 		Map<Object, Object> localCache;
-		CacheHint cacheHint;
+		volatile CacheHint cacheHint;
+		long cacheHintUpdated;
 		List<List<TempMetadataID>> keys;
 		List<TempMetadataID> indexes;
 		volatile long lastDataModification;
@@ -111,6 +112,14 @@ public class TempMetadataID implements Serializable, Modifiable, DataModifiable 
 		public Object getModel() {
 			return model;
 		}
+
+		public synchronized boolean updateCacheHint(long time) {
+			if (time >= cacheHintUpdated) {
+				cacheHintUpdated = time;
+				return true;
+			}
+			return false;
+		}
 		
 	}
 	
@@ -137,6 +146,7 @@ public class TempMetadataID implements Serializable, Modifiable, DataModifiable 
     private boolean autoIncrement;
     private boolean notNull;
     private boolean updatable;
+    private boolean accessed;
     
     /**
      * Constructor for group form of metadata ID.
@@ -441,6 +451,14 @@ public class TempMetadataID implements Serializable, Modifiable, DataModifiable 
 			this.name = Symbol.getShortName(this.ID);
 		}
 		return this.name;
+	}
+	
+	public void setAccessed(boolean accessed) {
+		this.accessed = accessed;
+	}
+	
+	public boolean isAccessed() {
+		return accessed;
 	}
 	
 }

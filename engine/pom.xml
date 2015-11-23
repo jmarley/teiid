@@ -3,7 +3,7 @@
 	<parent>
 		<artifactId>teiid-parent</artifactId>
 		<groupId>org.jboss.teiid</groupId>
-        <version>8.8.0.Beta2-SNAPSHOT</version>
+        <version>8.13.0.Alpha1-SNAPSHOT</version>
 	</parent>
 	<modelVersion>4.0.0</modelVersion>
 	<artifactId>teiid-engine</artifactId>
@@ -49,7 +49,6 @@
               <configuration>
                <instructions>
                 <Import-Package>!org.jboss.*,*</Import-Package>
-                <Export-Package>org.teiid.*</Export-Package>
                </instructions>
               </configuration>
             </plugin>            
@@ -57,58 +56,64 @@
     </build>
 
     <dependencies>
+        <dependency>
+            <groupId>org.jboss.teiid</groupId>
+            <artifactId>teiid-common-core</artifactId>
+        </dependency>
 
         <dependency>
             <groupId>org.jboss.teiid</groupId>
             <artifactId>teiid-common-core</artifactId>
             <type>test-jar</type>
+            <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>org.jboss.teiid</groupId>
             <artifactId>teiid-api</artifactId>
-            <scope>provided</scope>
         </dependency>
 
         <dependency>
             <groupId>org.jboss.teiid</groupId>
             <artifactId>teiid-client</artifactId>
-            <scope>provided</scope>
         </dependency>
         
         <dependency>
             <groupId>org.jboss.teiid</groupId>
             <artifactId>teiid-admin</artifactId>
-            <scope>provided</scope>
         </dependency>        
 
         <dependency>
             <groupId>org.jboss.teiid</groupId>
             <artifactId>teiid-client</artifactId>
             <type>test-jar</type>
-        </dependency>
-
-        <dependency>
-            <groupId>javax.resource</groupId>
-            <artifactId>connector-api</artifactId>
-            <scope>provided</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>javax.transaction</groupId>
-            <artifactId>jta</artifactId>
-            <scope>provided</scope>
+            <scope>test</scope>
         </dependency>
         
         <dependency>
+            <groupId>org.jboss.spec.javax.resource</groupId>
+            <artifactId>jboss-connector-api_1.7_spec</artifactId>
+        </dependency>        
+        
+        <dependency>
+            <groupId>org.jboss.spec.javax.transaction</groupId>
+            <artifactId>jboss-transaction-api_1.2_spec</artifactId>
+        </dependency>
+               
+        <dependency>
             <groupId>org.jboss</groupId>
             <artifactId>jboss-vfs</artifactId>
-            <scope>provided</scope>
         </dependency>
 
 		<dependency>
-			<groupId>net.sourceforge.saxon</groupId>
-			<artifactId>saxonhe</artifactId>
+		    <!-- dependecy for jboss-vfs -->
+		    <groupId>org.jboss.logging</groupId>
+		    <artifactId>jboss-logging</artifactId>
+		</dependency>
+
+		<dependency>
+			<groupId>net.sf.saxon</groupId>
+			<artifactId>Saxon-HE</artifactId>
 		</dependency>
 		
 		<dependency>
@@ -117,14 +122,30 @@
         </dependency>
 
         <dependency>
-              <groupId>xom</groupId>
+            <groupId>com.vividsolutions</groupId>
+            <artifactId>jts</artifactId>
+        </dependency>
+                
+        <dependency>
+            <groupId>org.wololo</groupId>
+            <artifactId>jts2geojson</artifactId>
+        </dependency>
+        
+        <dependency>
+            <groupId>org.osgeo</groupId>
+            <artifactId>proj4j</artifactId>
+        </dependency>
+
+        <dependency>
+              <groupId>com.io7m.xom</groupId>
               <artifactId>xom</artifactId>
         </dependency>
 
         <dependency>
               <groupId>jaxen</groupId>
               <artifactId>jaxen</artifactId>    
-        </dependency>         
+        </dependency>
+                          
 	</dependencies>
 
 </project>

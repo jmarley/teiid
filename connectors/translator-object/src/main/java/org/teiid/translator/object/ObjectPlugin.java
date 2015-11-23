@@ -39,6 +39,22 @@ public class ObjectPlugin {
     public static final BundleUtil Util = new BundleUtil(PLUGIN_ID, PLUGIN_ID + ".i18n", ResourceBundle.getBundle(PLUGIN_ID + ".i18n")); //$NON-NLS-1$ //$NON-NLS-2$
 
 	public static enum Event implements BundleUtil.Event{
-		TEIID21000
+		TEIID21000,
+		TEIID21001,
+		TEIID21002,
+		TEIID21003,
+		TEIID21004,
+		TEIID21005,
+		TEIID21006,
+		TEIID21007,
+		TEIID21008,
+		TEIID21009,
+		TEIID21010,
+		TEIID21011,
+		TEIID21012,
+		TEIID21013,
+		TEIID21014,
+		TEIID21015
+
     }
 }

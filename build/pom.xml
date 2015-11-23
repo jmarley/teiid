@@ -2,12 +2,21 @@
   <parent>
     <artifactId>teiid-parent</artifactId>
     <groupId>org.jboss.teiid</groupId>
-        <version>8.8.0.Beta2-SNAPSHOT</version>
+        <version>8.13.0.Alpha1-SNAPSHOT</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
+  
   <artifactId>teiid</artifactId>
   <name>Build</name>
   <description>Teiid Build</description>
+  
+  <properties>
+      <!-- Directory name from upstream Wildfly server dist. -->
+      <dir.wildfly>wildfly-${version.org.wildfly}</dir.wildfly>
+      <!-- Teiid server directory name. -->
+      <dir.teiid>teiid-${project.version}</dir.teiid>
+  </properties>
+  
     <dependencies>
         <dependency>
             <groupId>org.jboss.teiid</groupId>
@@ -20,10 +29,38 @@
         <dependency>
             <groupId>net.sf.retrotranslator</groupId>
             <artifactId>retrotranslator-transformer</artifactId>
-        </dependency>        
-    </dependencies>     
+        </dependency>
+    	<dependency>
+            <groupId>com.h2database</groupId>
+            <artifactId>h2</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+        </dependency> 
+       
+	<dependency>
+	    <groupId>org.jboss.narayana.jta</groupId>
+	    <artifactId>narayana-jta</artifactId>
+	</dependency> 
+	<dependency>
+	    <groupId>org.jboss.ironjacamar</groupId>
+	    <artifactId>ironjacamar-jdbc</artifactId>
+	</dependency>
+	<dependency>
+	    <groupId>org.jboss.ironjacamar</groupId>
+	    <artifactId>ironjacamar-core-api</artifactId>
+	</dependency>
+	<dependency>
+	    <groupId>org.jboss.ironjacamar</groupId>
+	    <artifactId>ironjacamar-core-impl</artifactId>
+	</dependency>
+
+    </dependencies>   
+      
     <build>
         <outputDirectory>target/kits</outputDirectory>
+        
         <resources>
             <resource>
                 <directory>kits</directory>
@@ -35,6 +72,7 @@
                     <include>**/*.bat</include>
                     <include>**/*.html</include>
                     <include>**/*.cli</include>
+                    <include>**/Dockerfile</include>
                 </includes>
             </resource>
             <resource>
@@ -47,47 +85,82 @@
                     <exclude>**/*.bat</exclude>
                     <exclude>**/*.html</exclude>
                     <exclude>**/*.cli</exclude>
+                    <exclude>**/Dockerfile</exclude>
                 </excludes>
             </resource>
         </resources>
+        
         <pluginManagement>
           <plugins>
             <plugin>
               <artifactId>maven-assembly-plugin</artifactId>
               <configuration>
-                  <archiverConfig>
-                      <fileMode>0644</fileMode>
-                      <directoryMode>0755</directoryMode>
-                      <defaultDirectoryMode>0755</defaultDirectoryMode>
-                  </archiverConfig>
               </configuration>
             </plugin>
           </plugins>
         </pluginManagement>
-        <plugins>
-          <plugin>
-            <artifactId>maven-assembly-plugin</artifactId>
-
-            <configuration>
-              <descriptors>
-                <descriptor>assembly/client-jar.xml</descriptor>
-                <descriptor>assembly/jboss-as7/dist.xml</descriptor>
-                <descriptor>assembly/adminshell/adminshell-dist.xml</descriptor>
-                <descriptor>assembly/embedded-dist.xml</descriptor>
-              </descriptors>
-            </configuration>
-
-            <executions>
-              <execution>
-                <id>create-assemblies</id>
-                <phase>package</phase>
-                <goals>
-                  <goal>single</goal>
-                </goals>
-              </execution>
-            </executions>
-          </plugin>
-
+        
+        <plugins>                        
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-dependency-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <id>unpack-server-deps</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>unpack</goal>
+                        </goals>
+                        <configuration>
+                            <artifactItems>
+                                <artifactItem>
+									<groupId>org.wildfly</groupId>
+									<artifactId>wildfly-dist</artifactId>
+                                    <version>${version.org.wildfly}</version>
+                                    <type>zip</type>
+                                    <outputDirectory>${project.build.directory}</outputDirectory>
+                                </artifactItem>
+                                <!-- 
+                                <artifactItem>
+                                    <groupId>org.jboss.teiid.web-console</groupId>
+                                    <artifactId>teiid-console-dist</artifactId>
+                                    <version>${version.teiid.console}</version>
+                                    <classifier>wildfly</classifier>
+                                    <type>zip</type>
+                                    <outputDirectory>${project.build.directory}/${dir.jboss-orig}</outputDirectory>
+                                    <overWrite>true</overWrite>
+                                </artifactItem>
+                                 -->
+                            </artifactItems>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            
+            <plugin>
+                <artifactId>maven-assembly-plugin</artifactId>
+                <configuration>
+                    <descriptors>
+                        <descriptor>assembly/src.xml</descriptor>
+                        <descriptor>assembly/client-jar.xml</descriptor>
+                        <descriptor>assembly/wildfly-dist.xml</descriptor>
+                        <descriptor>assembly/adminshell-dist.xml</descriptor>
+                        <descriptor>assembly/embedded-dist.xml</descriptor>
+                        <descriptor>assembly/wildfly-server.xml</descriptor>
+                        <descriptor>assembly/docker.xml</descriptor>            
+                    </descriptors>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>create-assemblies</id>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>single</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+            
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>exec-maven-plugin</artifactId>
@@ -135,6 +208,7 @@
                     </execution>
                 </executions>
             </plugin>
+                        
             <plugin>
                 <groupId>org.codehaus.mojo</groupId>
                 <artifactId>build-helper-maven-plugin</artifactId>
@@ -166,33 +240,34 @@
                     </execution>
                 </executions>
             </plugin>
+
         </plugins>
     </build>
     
     <profiles>
-      <profile>
-        <!-- 
+        <profile>
+            <!--
             This profile is activated manually, as in "mvn ... -P release ..."
-  		  -->
-        <id>release</id>
-        <build>
-          <plugins>
-            <plugin>
-              <artifactId>maven-assembly-plugin</artifactId>
-              <configuration>
-                <descriptors>
-                  <descriptor>assembly/src.xml</descriptor>
-                  <descriptor>assembly/client-jar.xml</descriptor>
-                  <descriptor>assembly/console-jar.xml</descriptor>    
-                  <descriptor>assembly/jboss-as7/dist.xml</descriptor>
-                  <descriptor>assembly/adminshell/adminshell-dist.xml</descriptor>
-                  <descriptor>assembly/embedded-dist.xml</descriptor>
-                </descriptors>
-              </configuration>
-            </plugin>
-
-          </plugins>
-        </build>
-      </profile>
-    </profiles>
+            -->
+            <id>release</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-assembly-plugin</artifactId>
+                        <configuration>
+                            <descriptors>
+                                <descriptor>assembly/src.xml</descriptor>
+                                <descriptor>assembly/client-jar.xml</descriptor>
+                                <descriptor>assembly/wildfly-dist.xml</descriptor>
+                                <descriptor>assembly/adminshell-dist.xml</descriptor>
+                                <descriptor>assembly/embedded-dist.xml</descriptor>
+                                <descriptor>assembly/wildfly-server.xml</descriptor>
+                                <descriptor>assembly/docker.xml</descriptor>
+                            </descriptors>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>    
 </project>

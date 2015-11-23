@@ -21,17 +21,25 @@
  */
 package org.teiid.deployers;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNull;
+import static org.junit.Assert.*;
 
 import java.util.ArrayList;
 
 import org.junit.Test;
+import org.mockito.Mockito;
 import org.teiid.adminapi.impl.VDBTranslatorMetaData;
+import org.teiid.logging.LogConstants;
+import org.teiid.logging.LogManager;
+import org.teiid.logging.Logger;
+import org.teiid.logging.MessageLevel;
 import org.teiid.metadata.Column;
 import org.teiid.metadata.ExtensionMetadataProperty;
 import org.teiid.metadata.MetadataFactory;
-import org.teiid.translator.*;
+import org.teiid.translator.ExecutionFactory;
+import org.teiid.translator.MetadataProcessor;
+import org.teiid.translator.Translator;
+import org.teiid.translator.TranslatorException;
+import org.teiid.translator.TranslatorProperty;
 import org.teiid.translator.TranslatorProperty.PropertyType;
 
 @SuppressWarnings("nls")
@@ -93,6 +101,29 @@ public class TestTranslatorUtil {
         assertEquals(true, importProperties.get(0).editable);
         assertEquals(false, importProperties.get(0).masked);
         assertEquals("default-import-property", importProperties.get(0).defaultValue);
+    }
+    
+    @Test
+    public void testInject() throws Exception {
+        VDBTranslatorMetaData tm = new VDBTranslatorMetaData();
+        tm.setExecutionFactoryClass(MyTranslator.class);
+        tm.addProperty("MyProperty", "correctly-assigned");
+        
+        MyTranslator my = (MyTranslator)TranslatorUtil.buildExecutionFactory(tm);
+        assertEquals("correctly-assigned", my.getMyProperty());
+        
+        VDBTranslatorMetaData metadata = TranslatorUtil.buildTranslatorMetadata(my, "my-module");
+        metadata.addProperty("MyProperty", "correctly-assigned");
+        
+        Logger logger = Mockito.mock(Logger.class);
+        Mockito.stub(logger.isEnabled(Mockito.anyString(), Mockito.anyInt())).toReturn(true);
+        Mockito.doThrow(new RuntimeException("fail")).when(logger).log(Mockito.eq(MessageLevel.WARNING), Mockito.eq(LogConstants.CTX_RUNTIME), Mockito.anyString());
+        LogManager.setLogListener(logger);
+        try {
+        	TranslatorUtil.buildExecutionFactory(metadata);
+        } finally {
+        	LogManager.setLogListener(null);
+        }
     }
     
     @Test

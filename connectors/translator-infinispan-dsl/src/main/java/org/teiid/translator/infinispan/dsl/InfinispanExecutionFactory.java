@@ -27,8 +27,10 @@ import java.util.List;
 import javax.resource.cci.ConnectionFactory;
 
 import org.teiid.language.Command;
+import org.teiid.language.Delete;
 import org.teiid.language.QueryExpression;
 import org.teiid.language.Select;
+import org.teiid.language.Update;
 import org.teiid.metadata.RuntimeMetadata;
 import org.teiid.translator.ExecutionContext;
 import org.teiid.translator.ExecutionFactory;
@@ -37,6 +39,7 @@ import org.teiid.translator.ResultSetExecution;
 import org.teiid.translator.Translator;
 import org.teiid.translator.TranslatorException;
 import org.teiid.translator.UpdateExecution;
+import org.teiid.translator.TranslatorProperty;
 import org.teiid.translator.infinispan.dsl.metadata.ProtobufMetadataProcessor;
 
 
@@ -47,7 +50,7 @@ import org.teiid.translator.infinispan.dsl.metadata.ProtobufMetadataProcessor;
  * 
  * @author vhalbert
  * 
- * @since 8.8
+ * @since 8.7
  *
  */
 @Translator(name = "infinispan-cache-dsl", description = "The Infinispan Translator Using DSL to Query Cache")
@@ -56,7 +59,10 @@ public class InfinispanExecutionFactory extends
 
 	public static final int MAX_SET_SIZE = 10000;
 	
+	private boolean supportsCompareCriteriaOrdered = false;
+	
 	public InfinispanExecutionFactory() {
+		super();
 		setSourceRequiredForMetadata(true);
 		setMaxInCriteriaSize(MAX_SET_SIZE);
 		setMaxDependentInPredicates(1);
@@ -66,18 +72,15 @@ public class InfinispanExecutionFactory extends
 		setSupportsInnerJoins(true);
 		setSupportsFullOuterJoins(false);
 		setSupportsOuterJoins(true);
+		
 	
 		setSupportedJoinCriteria(SupportedJoinCriteria.KEY);
 	}
-	
-	
 
 	@Override
 	public int getMaxFromGroups() {
 		return 2;
 	}
-
-
 
 	@Override
 	public ResultSetExecution createResultSetExecution(QueryExpression command,
@@ -86,15 +89,19 @@ public class InfinispanExecutionFactory extends
 		return new InfinispanExecution((Select) command, metadata, this, connection, executionContext);
 	}
 	
-	
     @Override
 	public UpdateExecution createUpdateExecution(Command command,
 			ExecutionContext executionContext, RuntimeMetadata metadata,
-			InfinispanConnection connection) {
+			InfinispanConnection connection) throws TranslatorException {
+    	// if no primary key defined,then updates are not enabled
+    	if (connection.getPkField() == null) {
+			throw new TranslatorException(InfinispanPlugin.Util.gs(InfinispanPlugin.Event.TEIID25007, new Object[] {connection.getCacheName()}));
+    	}
     	return new InfinispanUpdateExecution(command, connection, executionContext, this);
 	}
     
-    @Override
+
+	@Override
     public boolean supportsAliasedTable() {
         return true;
     }
@@ -104,15 +111,14 @@ public class InfinispanExecutionFactory extends
 		return Boolean.TRUE.booleanValue();
 	}
 
+	/**
+	 * @see @link https://issues.jboss.org/browse/TEIID-3573
+	 * Discusses issue with trying to support IS NULL and IS NOT NULL;
+	 */
 	@Override
     public boolean supportsIsNullCriteria() {
-		return Boolean.TRUE.booleanValue();
+		return Boolean.FALSE.booleanValue();
 	}
-	
-//	@Override
-//	public boolean supportsOnlyLiteralComparison() {
-//		return false;
-//	}
 	
 	@Override
 	public boolean supportsOrCriteria() {
@@ -123,11 +129,15 @@ public class InfinispanExecutionFactory extends
     public boolean supportsCompareCriteriaEquals() {
 		return Boolean.TRUE.booleanValue();
 	}
-	
-	
+
+	@TranslatorProperty(display="CompareCriteriaOrdered", description="If true, translator can support comparison criteria with the operator '=>' or '<=' ",advanced=true)
 	@Override
 	public boolean supportsCompareCriteriaOrdered() {
-		return Boolean.TRUE.booleanValue();
+		return supportsCompareCriteriaOrdered;
+	}
+	
+	public boolean setSupportsCompareCriteriaOrdered(boolean supports) {
+		return supportsCompareCriteriaOrdered = supports;
 	}
 	
 	@Override
@@ -140,14 +150,34 @@ public class InfinispanExecutionFactory extends
 		return Boolean.TRUE.booleanValue();
 	}	
 	
-	
+	/**
+	 * @see @link https://issues.jboss.org/browse/TEIID-3573
+	 * Discusses issue with trying to support NOT;
+	 */
+	@Override
+	public boolean supportsNotCriteria() {
+		return Boolean.FALSE.booleanValue();
+	}
 
 	public List<Object> search(Select command, String cacheName,
 			InfinispanConnection connection, ExecutionContext executionContext)
 			throws TranslatorException {
-
-			return DSLSearch.performSearch(command, connection.getType(cacheName), cacheName, connection);
+		return DSLSearch.performSearch(command, cacheName, connection);
 	}
+	
+	public List<Object> search(Delete command, String cacheName, InfinispanConnection conn, ExecutionContext executionContext)
+				throws TranslatorException {   
+		return DSLSearch.performSearch(command, cacheName, conn);
+	}
+	
+	public List<Object> search(Update command, String cacheName, InfinispanConnection conn, ExecutionContext executionContext)
+			throws TranslatorException {   
+		return DSLSearch.performSearch(command, cacheName, conn);
+	}	
+	
+	public Object performKeySearch(String cacheName, String columnName, Object value, InfinispanConnection conn, ExecutionContext executionContext) throws TranslatorException {
+		return DSLSearch.performKeySearch(cacheName, columnName, value, conn);
+	}	
 
 	@Override
     public MetadataProcessor<InfinispanConnection> getMetadataProcessor(){

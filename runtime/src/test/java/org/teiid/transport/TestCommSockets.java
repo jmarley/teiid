@@ -169,7 +169,7 @@ public class TestCommSockets {
 			server.registerClientService(ILogon.class, new LogonImpl(service, "fakeCluster"), null); 
 			server.registerClientService(FakeService.class, new TestSocketRemoting.FakeServiceImpl(), null);
 			storageManager = new MemoryStorageManager();
-			listener = new SocketListener(addr, 1024, 1024, 1, config, server, storageManager);
+			listener = new SocketListener(addr, 0, 0, 2, config, server, storageManager);
 			
 			SocketListenerStats stats = listener.getStats();
 			assertEquals(0, stats.maxSockets);
@@ -314,7 +314,7 @@ public class TestCommSockets {
 		assertEquals(2, this.service.getActiveSessionsCount());
 		conn.selectServerInstance(false);
 		assertEquals(2, this.service.getActiveSessionsCount());
-		assertTrue(conn.isOpen(1000));
+		assertTrue(conn.isOpen(10000));
 		stats = listener.getStats();
 		assertEquals(8, stats.objectsRead); // (ping (pool test), assert identityx2, ping (isOpen))x2
 		assertEquals(2, stats.sockets);

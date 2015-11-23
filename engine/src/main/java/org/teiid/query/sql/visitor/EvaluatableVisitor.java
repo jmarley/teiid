@@ -24,8 +24,6 @@ package org.teiid.query.sql.visitor;
 
 import java.util.TreeSet;
 
-import org.teiid.api.exception.query.QueryMetadataException;
-import org.teiid.core.TeiidComponentException;
 import org.teiid.metadata.FunctionMethod.Determinism;
 import org.teiid.metadata.FunctionMethod.PushDown;
 import org.teiid.query.function.FunctionDescriptor;
@@ -33,11 +31,11 @@ import org.teiid.query.function.FunctionLibrary;
 import org.teiid.query.metadata.QueryMetadataInterface;
 import org.teiid.query.metadata.TempMetadataID;
 import org.teiid.query.optimizer.capabilities.CapabilitiesFinder;
-import org.teiid.query.optimizer.relational.rules.CapabilitiesUtil;
 import org.teiid.query.sql.LanguageObject;
 import org.teiid.query.sql.LanguageVisitor;
 import org.teiid.query.sql.lang.DependentSetCriteria;
 import org.teiid.query.sql.lang.ExistsCriteria;
+import org.teiid.query.sql.lang.IsDistinctCriteria;
 import org.teiid.query.sql.lang.SPParameter;
 import org.teiid.query.sql.lang.StoredProcedure;
 import org.teiid.query.sql.lang.SubqueryCompareCriteria;
@@ -87,18 +85,7 @@ public class EvaluatableVisitor extends LanguageVisitor {
     public void visit(Function obj) {
         FunctionDescriptor fd = obj.getFunctionDescriptor();
 		this.setDeterminismLevel(fd.getDeterministic());
-        if (fd.getDeterministic() == Determinism.NONDETERMINISTIC) {
-            evaluationNotPossible(EvaluationLevel.PUSH_DOWN);
-        } else if (fd.getPushdown() == PushDown.MUST_PUSHDOWN) {
-        	try {
-				if (obj.isEval() && modelId != null && fd.getPushdown() == PushDown.MUST_PUSHDOWN 
-								&& fd.getMethod() != null 
-								&& CapabilitiesUtil.isSameConnector(modelId, fd.getMethod().getParent(), metadata, capFinder)) {
-					obj.setEval(false);
-				}
-			} catch (QueryMetadataException e) {
-			} catch (TeiidComponentException e) {
-			}
+        if (fd.getDeterministic() == Determinism.NONDETERMINISTIC || fd.getPushdown() == PushDown.MUST_PUSHDOWN) {
         	if (obj.isEval()) {
         		evaluationNotPossible(EvaluationLevel.PROCESSING);
         	} else {
@@ -108,6 +95,9 @@ public class EvaluatableVisitor extends LanguageVisitor {
         		//TODO: if we had the context here we could plan better for non-prepared requests
         		|| fd.getDeterministic().compareTo(Determinism.COMMAND_DETERMINISTIC) <= 0) {
             evaluationNotPossible(EvaluationLevel.PROCESSING);
+        } else if (fd.getProcedure() != null) {
+        	//a function defined by a procedure
+        	evaluationNotPossible(EvaluationLevel.PROCESSING);
         }
     }
     
@@ -216,6 +206,11 @@ public class EvaluatableVisitor extends LanguageVisitor {
 
     public void visit(SubqueryCompareCriteria obj) {
 		evaluationNotPossible(EvaluationLevel.PUSH_DOWN);
+    }
+    
+    @Override
+    public void visit(IsDistinctCriteria isDistinctCriteria) {
+		evaluationNotPossible(EvaluationLevel.PROCESSING);
     }
     
     private boolean isEvaluationPossible() {

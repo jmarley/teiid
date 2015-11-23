@@ -36,7 +36,7 @@ import org.teiid.cdk.api.TranslationUtility;
 import org.teiid.language.Select;
 import org.teiid.translator.ExecutionContext;
 import org.teiid.translator.TranslatorException;
-import org.teiid.translator.infinispan.dsl.util.VDBUtility;
+import org.teiid.translator.infinispan.dsl.util.PersonSchemaVDBUtility;
 
 /**
  * NOTES: 
@@ -53,7 +53,7 @@ public class TestInfinispanExecution {
 	
 	private static InfinispanConnection CONNECTION;
 	
-	private static TranslationUtility translationUtility = VDBUtility.TRANSLATION_UTILITY;
+	private static TranslationUtility translationUtility = PersonSchemaVDBUtility.TRANSLATION_UTILITY;
 	
 	static Map<?, ?> DATA = PersonCacheSource.loadCache();
 	
@@ -61,13 +61,13 @@ public class TestInfinispanExecution {
     @BeforeClass
     public static void setUp()  {
         
-		CONNECTION = PersonCacheSource.createConnection();
+		CONNECTION = PersonCacheSource.createConnection(true);
 
     }	
 
 
 	@Test public void testExecution() throws Exception {
-		Select command = (Select)translationUtility.parseCommand("select name, id, email From Persons_Object_Model.Persons as T"); //$NON-NLS-1$
+		Select command = (Select)translationUtility.parseCommand("select name, id, email From Person as T"); //$NON-NLS-1$
 		
 		performTest(10, 3, command);
 
@@ -78,7 +78,7 @@ public class TestInfinispanExecution {
 	 * @throws Exception
 	 */
 	@Test public void testReturningObject() throws Exception {
-		Select command = (Select)translationUtility.parseCommand("select PersonObject From Persons_Object_Model.Persons as T"); //$NON-NLS-1$
+		Select command = (Select)translationUtility.parseCommand("select PersonObject From Person as T"); //$NON-NLS-1$
 
 		
 		performTest(10, 1, command);
@@ -86,7 +86,7 @@ public class TestInfinispanExecution {
 	}
 	
 	@Test public void test1toManyOnlyChild() throws Exception {
-		Select command = (Select)translationUtility.parseCommand("select number From Persons_Object_Model.PhoneNumber as T"); //$NON-NLS-1$
+		Select command = (Select)translationUtility.parseCommand("select number From PhoneNumber as T"); //$NON-NLS-1$
 
 		
 		performTest(20, 1, command);
@@ -94,7 +94,7 @@ public class TestInfinispanExecution {
 	}
 	
 	@Test public void test1toManyA() throws Exception {
-		Select command = (Select)translationUtility.parseCommand("select a.name, a.id, a.email, b.number From Persons_Object_Model.Persons as A, Persons_Object_Model.PhoneNumber as b where a.id = b.id"); //$NON-NLS-1$
+		Select command = (Select)translationUtility.parseCommand("select a.name, a.id, a.email, b.number From Person as A, PhoneNumber as b where a.id = b.id"); //$NON-NLS-1$
 
 		
 		performTest(20, 4, command);
@@ -102,7 +102,7 @@ public class TestInfinispanExecution {
 	}
 	
 	@Test public void test1toManyB() throws Exception {
-		Select command = (Select)translationUtility.parseCommand("select a.name, a.id, a.email, b.number, b.type From Persons_Object_Model.Persons as A, Persons_Object_Model.PhoneNumber as b where a.id = b.id"); //$NON-NLS-1$
+		Select command = (Select)translationUtility.parseCommand("select a.name, a.id, a.email, b.number, b.type From Person as A, PhoneNumber as b where a.id = b.id"); //$NON-NLS-1$
 
 		
 		performTest(20, 5, command);
@@ -180,6 +180,6 @@ public class TestInfinispanExecution {
         translator.start();
 
 		
-		return (InfinispanExecution) translator.createExecution(command, Mockito.mock(ExecutionContext.class), VDBUtility.RUNTIME_METADATA, CONNECTION);
+		return (InfinispanExecution) translator.createExecution(command, Mockito.mock(ExecutionContext.class), PersonSchemaVDBUtility.RUNTIME_METADATA, CONNECTION);
 	}
 }

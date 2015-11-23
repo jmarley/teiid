@@ -68,7 +68,31 @@ import org.teiid.query.util.CommandContext;
 @SuppressWarnings("nls")
 public class TestQueryRewriter {
 
-    private static final String TRUE_STR = "1 = 1"; //$NON-NLS-1$
+    private static final class FakeObject implements Comparable<FakeObject> {
+    	
+    	private int hashCode;
+
+		public FakeObject(int hashCode) {
+    		this.hashCode = hashCode;
+		}
+    	
+		@Override
+		public int hashCode() {
+			return hashCode;
+		}
+
+		@Override
+		public boolean equals(Object obj) {
+			return true;
+		}
+		
+		@Override
+		public int compareTo(FakeObject o) {
+			return 0;
+		}
+	}
+
+	private static final String TRUE_STR = "1 = 1"; //$NON-NLS-1$
     private static final String FALSE_STR = "1 = 0"; //$NON-NLS-1$
 
     // ################################## TEST HELPERS ################################
@@ -173,7 +197,7 @@ public class TestQueryRewriter {
     }
     
     public static Command helpTestRewriteCommand(String original, String expected, QueryMetadataInterface metadata) throws TeiidException { 
-        return helpTestRewriteCommand(original, expected, metadata, null);
+        return helpTestRewriteCommand(original, expected, metadata, new CommandContext());
     }
     
     public static Command helpTestRewriteCommand(String original, String expected, QueryMetadataInterface metadata, CommandContext cc) throws TeiidException {
@@ -220,6 +244,18 @@ public class TestQueryRewriter {
         helpTestRewriteCriteria("pm1.g1.e1 in (2, null)", "pm1.g1.e1 = '2'"); //$NON-NLS-1$ //$NON-NLS-2$ 
     }
     
+    @Test public void testRewriteUnknown9() {
+    	helpTestRewriteCriteria("pm1.g1.e1 not in (2, null)", "1 = 0"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+    
+    @Test public void testRewriteUnknown10() {
+    	helpTestRewriteCriteria("pm1.g1.e1 <> 'a' and pm1.g1.e2 <> null", "1 = 0"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+    
+    @Test public void testRewriteUnknown11() {
+    	helpTestRewriteCommand("update pm1.g1 set e3 = pm1.g1.e1 <> 'a' and pm1.g1.e2 <> null", "UPDATE pm1.g1 SET e3 = (pm1.g1.e1 <> 'a') AND (null <> null)"); //$NON-NLS-1$ //$NON-NLS-2$
+    }
+    
     @Test public void testRewriteInCriteriaWithRepeats() {
         helpTestRewriteCriteria("pm1.g1.e1 in ('1', '1', '2')", "pm1.g1.e1 IN ('1', '2')"); //$NON-NLS-1$ //$NON-NLS-2$
     }
@@ -248,6 +284,18 @@ public class TestQueryRewriter {
         crit.setNegated(true);
         
         actual = QueryRewriter.rewriteCriteria(crit, null, null);
+        
+        assertEquals(QueryRewriter.TRUE_CRITERIA, actual);
+    }
+    
+    @Test public void testRewriteInNotHashable() throws Exception {
+    	Constant c = new Constant(new FakeObject(0));
+    	SetCriteria crit = new SetCriteria(c, new ArrayList<Constant>()); //$NON-NLS-1$
+        
+    	crit.getValues().add(new Constant(new FakeObject(1)));
+    	crit.getValues().add(new Constant(new FakeObject(2)));
+    	
+        Criteria actual = QueryRewriter.rewriteCriteria(crit, null, null);
         
         assertEquals(QueryRewriter.TRUE_CRITERIA, actual);
     }
@@ -1670,6 +1718,12 @@ public class TestQueryRewriter {
 		QueryMetadataInterface metadata = RealMetadataFactory.fromDDL(ddl, "x", "phy");
 		
     	helpTestRewriteCommand("merge into x (y) values (1)", "BEGIN ATOMIC\nDECLARE integer VARIABLES.ROWS_UPDATED = 0;\nLOOP ON (SELECT X.expr1 AS y FROM (SELECT '1' AS expr1) AS X) AS X1\nBEGIN\nIF(EXISTS (SELECT 1 FROM x WHERE y = X1.y LIMIT 1))\nBEGIN\nEND\nELSE\nBEGIN\nINSERT INTO x (y) VALUES (X1.y);\nEND\nVARIABLES.ROWS_UPDATED = (VARIABLES.ROWS_UPDATED + 1);\nEND\nSELECT VARIABLES.ROWS_UPDATED;\nEND", metadata);
+    }
+    
+	@Test public void testUnknownRewrite() throws Exception {
+		String sql = "SELECT 1 = null"; //$NON-NLS-1$
+        
+		helpTestRewriteCommand(sql, "SELECT UNKNOWN");
     }
 
 }

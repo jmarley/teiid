@@ -26,13 +26,16 @@ package org.teiid.translator.jdbc;
 
 import static org.teiid.language.SQLConstants.Reserved.*;
 
+import java.math.BigDecimal;
 import java.sql.Time;
 import java.sql.Timestamp;
 import java.text.DecimalFormat;
+import java.text.DecimalFormatSymbols;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -58,14 +61,15 @@ public class SQLConversionVisitor extends SQLStringVisitor implements SQLStringV
 	public static final String TEIID_NON_PREPARED = AbstractMetadataRecord.RELATIONAL_URI + "non-prepared"; //$NON-NLS-1$
 
     private static DecimalFormat DECIMAL_FORMAT = 
-        new DecimalFormat("#############################0.0#############################"); //$NON-NLS-1$    
-    private static double SCIENTIC_LOW = Math.pow(10, -3);
-    private static double SCIENTIC_HIGH = Math.pow(10, 7);
+        new DecimalFormat("#############################0.0#############################", DecimalFormatSymbols.getInstance(Locale.US)); //$NON-NLS-1$    
+    private static double SCIENTIFIC_LOW = Math.pow(10, -3);
+    private static double SCIENTIFIC_HIGH = Math.pow(10, 7);
     
     private ExecutionContext context;
     private JDBCExecutionFactory executionFactory;
 
     private boolean prepared;
+    private boolean usingBinding;
     
     private List preparedValues = new ArrayList();
     
@@ -81,6 +85,10 @@ public class SQLConversionVisitor extends SQLStringVisitor implements SQLStringV
     
     @Override
     public void append(LanguageObject obj) {
+    	if (shortNameOnly && obj instanceof ColumnReference) {
+    		super.append(obj);
+    		return;
+    	}
         boolean replacementMode = replaceWithBinding;
         if (obj instanceof Command || obj instanceof Function) {
     	    /*
@@ -134,15 +142,19 @@ public class SQLConversionVisitor extends SQLStringVisitor implements SQLStringV
         } else {
             if(Number.class.isAssignableFrom(type)) {
                 boolean useFormatting = false;
-                
-                if (Double.class.isAssignableFrom(type)){
-                    double value = ((Double)obj).doubleValue();
-                    useFormatting = (value <= SCIENTIC_LOW || value >= SCIENTIC_HIGH); 
-                }
-                else if (Float.class.isAssignableFrom(type)){
-                    float value = ((Float)obj).floatValue();
-                    useFormatting = (value <= SCIENTIC_LOW || value >= SCIENTIC_HIGH);
-                }
+            	if (!executionFactory.useScientificNotation()) {
+	                if (Double.class.isAssignableFrom(type)){
+	                    double value = Math.abs(((Double)obj).doubleValue());
+	                    useFormatting = (value <= SCIENTIFIC_LOW || value >= SCIENTIFIC_HIGH); 
+	                }
+	                else if (Float.class.isAssignableFrom(type)){
+	                    float value = Math.abs(((Float)obj).floatValue());
+	                    useFormatting = (value <= SCIENTIFIC_LOW || value >= SCIENTIFIC_HIGH);
+	                } else if (BigDecimal.class.isAssignableFrom(type)) {
+	                	valuesbuffer.append(((BigDecimal)obj).toPlainString());
+	                	return;
+	                }
+            	}
                 // The formatting is to avoid the so-called "scientic-notation"
                 // where toString will use for numbers greater than 10p7 and
                 // less than 10p-3, where database may not understand.
@@ -159,7 +171,11 @@ public class SQLConversionVisitor extends SQLStringVisitor implements SQLStringV
             } else if(type.equals(TypeFacility.RUNTIME_TYPES.TIMESTAMP)) {
                 valuesbuffer.append(executionFactory.translateLiteralTimestamp((Timestamp)obj));
             } else if(type.equals(TypeFacility.RUNTIME_TYPES.TIME)) {
-                valuesbuffer.append(executionFactory.translateLiteralTime((Time)obj));
+            	if (!executionFactory.hasTimeType()) {
+            		valuesbuffer.append(executionFactory.translateLiteralTimestamp(new Timestamp(((Time)obj).getTime())));
+            	} else {
+            		valuesbuffer.append(executionFactory.translateLiteralTime((Time)obj));
+            	}
             } else if(type.equals(TypeFacility.RUNTIME_TYPES.DATE)) {
                 valuesbuffer.append(executionFactory.translateLiteralDate((java.sql.Date)obj));
             } else if (type.equals(DataTypeManager.DefaultDataClasses.VARBINARY)) {
@@ -168,18 +184,32 @@ public class SQLConversionVisitor extends SQLStringVisitor implements SQLStringV
             		  .append("'"); //$NON-NLS-1$
             } else {
                 // If obj is string, toSting() will not create a new String 
-                // object, it returns it self, so new object creation. 
+                // object, it returns it self, so new object creation.
+            	String val = obj.toString();
+            	if (useUnicodePrefix()) {
+	            	for (int i = 0; i < val.length(); i++) {
+	    				if (val.charAt(i) > 127) {
+	    					buffer.append("N"); //$NON-NLS-1$
+	    					break;
+	    				}
+	    			}
+            	}
                 valuesbuffer.append(Tokens.QUOTE)
-                      .append(escapeString(obj.toString(), Tokens.QUOTE))
+                      .append(escapeString(val, Tokens.QUOTE))
                       .append(Tokens.QUOTE);
             }
         }        
+    }
+    
+    protected boolean useUnicodePrefix() {
+    	return this.executionFactory.useUnicodePrefix();
     }
 
     /**
      * @see org.teiid.language.visitor.SQLStringVisitor#visit(org.teiid.language.Call)
      */
     public void visit(Call obj) {
+    	usingBinding = true;
     	Procedure p = obj.getMetadataObject();
     	if (p != null) {
 	    	String nativeQuery = p.getProperty(TEIID_NATIVE_QUERY, false);
@@ -220,6 +250,7 @@ public class SQLConversionVisitor extends SQLStringVisitor implements SQLStringV
 	public void visit(Parameter obj) {
         buffer.append(UNDEFINED_PARAM);
         preparedValues.add(obj);
+        usingBinding = true;
 	}
     
     /**
@@ -229,6 +260,7 @@ public class SQLConversionVisitor extends SQLStringVisitor implements SQLStringV
         if (this.prepared && ((replaceWithBinding && obj.isBindEligible()) || TranslatedCommand.isBindEligible(obj))) {
             buffer.append(UNDEFINED_PARAM);
             preparedValues.add(obj);
+            usingBinding = true;
         } else {
             translateSQLType(obj.getType(), obj.getValue(), buffer);
         }
@@ -351,6 +383,10 @@ public class SQLConversionVisitor extends SQLStringVisitor implements SQLStringV
     
     public void setPrepared(boolean prepared) {
 		this.prepared = prepared;
+	}
+    
+    public boolean isUsingBinding() {
+		return usingBinding;
 	}
     
     @Override

@@ -22,14 +22,23 @@
 
 package org.teiid.query.optimizer;
 
+import java.util.Arrays;
+import java.util.List;
+
 import org.junit.Test;
+import org.teiid.core.TeiidComponentException;
+import org.teiid.core.TeiidProcessingException;
 import org.teiid.query.metadata.TransformationMetadata;
 import org.teiid.query.optimizer.TestOptimizer.ComparisonMode;
 import org.teiid.query.optimizer.capabilities.BasicSourceCapabilities;
 import org.teiid.query.optimizer.capabilities.DefaultCapabilitiesFinder;
 import org.teiid.query.optimizer.capabilities.FakeCapabilitiesFinder;
 import org.teiid.query.optimizer.capabilities.SourceCapabilities.Capability;
+import org.teiid.query.processor.FakeDataManager;
+import org.teiid.query.processor.FakeDataStore;
+import org.teiid.query.processor.HardcodedDataManager;
 import org.teiid.query.processor.ProcessorPlan;
+import org.teiid.query.processor.TestProcessor;
 import org.teiid.query.processor.relational.LimitNode;
 import org.teiid.query.unittest.RealMetadataFactory;
 
@@ -163,6 +172,29 @@ public class TestUnionPlanning {
         ProcessorPlan plan = TestOptimizer.helpPlan("select * from (SELECT IntKey FROM BQT1.SmallA where intkey in (1, 2) UNION ALL SELECT intkey FROM BQT2.SmallA where intkey in (3, 4)) A inner join (SELECT intkey FROM BQT1.SmallB where intkey in (1, 2) UNION ALL SELECT intkey FROM BQT2.SmallB where intkey in (3, 4)) B on a.intkey = b.intkey", RealMetadataFactory.exampleBQTCached(), null, TestOptimizer.getGenericFinder(),//$NON-NLS-1$
             new String[] { "SELECT g_1.intkey, g_0.intkey FROM BQT2.SmallA AS g_0, BQT2.SmallB AS g_1 WHERE (g_0.intkey = g_1.intkey) AND (g_0.intkey IN (3, 4)) AND (g_1.intkey IN (3, 4))", 
         	"SELECT g_1.intkey, g_0.IntKey FROM BQT1.SmallA AS g_0, BQT1.SmallB AS g_1 WHERE (g_0.IntKey = g_1.intkey) AND (g_0.intkey IN (1, 2)) AND (g_1.intkey IN (1, 2))" }, TestOptimizer.SHOULD_SUCCEED); 
+
+        TestOptimizer.checkNodeTypes(plan, new int[] {
+            2,      // Access
+            0,      // DependentAccess
+            0,      // DependentSelect
+            0,      // DependentProject
+            0,      // DupRemove
+            0,      // Grouping
+            0,      // NestedLoopJoinStrategy
+            0,      // MergeJoinStrategy
+            0,      // Null
+            0,      // PlanExecution
+            0,      // Project
+            0,      // Select
+            0,      // Sort
+            1       // UnionAll
+        });                                    
+    }
+    
+    @Test public void testUnionPushDownWithJoinNonAnsi() {
+        ProcessorPlan plan = TestOptimizer.helpPlan("select * from (SELECT IntKey FROM BQT1.SmallA where intkey in (1, 2) UNION ALL SELECT intkey FROM BQT2.SmallA where intkey in (3, 4)) A, (SELECT intkey FROM BQT1.SmallB where intkey in (1, 2) UNION ALL SELECT intkey FROM BQT2.SmallB where intkey in (3, 4)) B where a.intkey = b.intkey", RealMetadataFactory.exampleBQTCached(), null, TestOptimizer.getGenericFinder(),//$NON-NLS-1$
+            new String[] { "SELECT g_0.intkey, g_1.intkey FROM BQT2.SmallA AS g_0, BQT2.SmallB AS g_1 WHERE (g_0.intkey = g_1.intkey) AND (g_0.intkey IN (3, 4)) AND (g_1.intkey IN (3, 4))", 
+        	"SELECT g_0.intkey, g_1.IntKey FROM BQT1.SmallA AS g_0, BQT1.SmallB AS g_1 WHERE (g_0.IntKey = g_1.intkey) AND (g_0.intkey IN (1, 2)) AND (g_1.intkey IN (1, 2))" }, TestOptimizer.SHOULD_SUCCEED); 
 
         TestOptimizer.checkNodeTypes(plan, new int[] {
             2,      // Access
@@ -543,8 +575,38 @@ public class TestUnionPlanning {
     	
     }
     
+    @Test public void testCostingWithGroupingAndOrder() throws Exception {
+    	String sql = "select e1 as admissionid,e2 as patgroup,e3 as ward,e4 as admtime, 'wh' as origin from pm1.g1 gd "
+    			+ " group by e1,e2,e3,e4 UNION ALL select e1,e2,e3,e4, 'prod' from pm1.g2 gd"
+    			+ " group by e1,e2,e3,e4 order by admtime limit 1";
+    	
+    	BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+    	caps.setCapabilitySupport(Capability.ROW_LIMIT, true);
+    	caps.setCapabilitySupport(Capability.QUERY_ORDERBY, false);
+    	
+    	TransformationMetadata tm = RealMetadataFactory.example1();
+    	RealMetadataFactory.setCardinality("pm1.g1", 1000, tm);
+    	RealMetadataFactory.setCardinality("pm1.g2", 1000, tm);
+    	
+		ProcessorPlan plan = TestOptimizer.helpPlan(sql, tm, null, new DefaultCapabilitiesFinder(caps),//$NON-NLS-1$
+                new String[] { "SELECT g_0.e1, g_0.e2, g_0.e3, g_0.e4 FROM pm1.g2 AS g_0", "SELECT g_0.e1, g_0.e2, g_0.e3, g_0.e4 FROM pm1.g1 AS g_0" }, ComparisonMode.EXACT_COMMAND_STRING);
+
+		FakeDataManager dataManager = new FakeDataManager();
+		FakeDataStore.sampleData2(dataManager);
+		TestProcessor.helpProcess(plan, dataManager, new List[] {Arrays.asList("b",1,true,null,"wh")} );
+    }
+    
     //TODO: enhancement for ordering over a partition
     
+    @Test public void testPreserveGroupingOverUnion() throws TeiidComponentException, TeiidProcessingException {
+    	String sql = "select y.col2 from ( select x.col2, min(x.col1) as col1 from ( select 1 as col2, col1 from "
+    			+ "(select 'a' as col1 UNION SELECT '' as col1) v1 union select 1 as col2, col1 from (select 'b' as col1 UNION SELECT '' as col1) v2) x group by x.col2 ) y";
+    	TransformationMetadata tm = RealMetadataFactory.example1Cached();
+    	ProcessorPlan plan = TestOptimizer.helpPlan(sql, tm, null, new DefaultCapabilitiesFinder(),//$NON-NLS-1$
+                new String[] {}, ComparisonMode.EXACT_COMMAND_STRING);
+
+    	TestProcessor.helpProcess(plan, new HardcodedDataManager(), new List[] {Arrays.asList(1)} );
+    }
     
 
 }

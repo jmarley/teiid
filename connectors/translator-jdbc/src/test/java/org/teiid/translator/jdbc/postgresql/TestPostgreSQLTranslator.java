@@ -24,10 +24,15 @@ package org.teiid.translator.jdbc.postgresql;
 
 import static org.junit.Assert.*;
 
+import java.sql.Connection;
+
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.teiid.core.util.SimpleMock;
+import org.teiid.translator.SourceSystemFunctions;
 import org.teiid.translator.TranslatorException;
 import org.teiid.translator.jdbc.TranslationHelper;
+import org.teiid.translator.jdbc.Version;
 
 @SuppressWarnings("nls")
 public class TestPostgreSQLTranslator {
@@ -37,7 +42,10 @@ public class TestPostgreSQLTranslator {
     @BeforeClass public static void setupOnce() throws Exception {
         TRANSLATOR = new PostgreSQLExecutionFactory(); 
         TRANSLATOR.setUseBindVariables(false);
+        TRANSLATOR.setDatabaseVersion(Version.DEFAULT_VERSION);
         TRANSLATOR.start();
+        TRANSLATOR.setPostGisVersion("1.0");
+        TRANSLATOR.initCapabilities(SimpleMock.createSimpleMock(Connection.class));
     }
     
     public String getTestVDB() {
@@ -50,6 +58,10 @@ public class TestPostgreSQLTranslator {
         
     public void helpTestVisitor(String vdb, String input, String expectedOutput) throws TranslatorException {
         TranslationHelper.helpTestVisitor(vdb, input, expectedOutput, TRANSLATOR);
+    }
+    
+    @Test public void testStartWithoutVersion() throws TranslatorException {
+    	new PostgreSQLExecutionFactory().start();
     }
 
     @Test public void testConversion1() throws Exception {
@@ -239,18 +251,10 @@ public class TestPostgreSQLTranslator {
             input, 
             output);
     }
-    @Test public void testRight() throws Exception {
-        String input = "SELECT right(PART_WEIGHT, 2) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT SUBSTR(PARTS.PART_WEIGHT, (-1 * 2)) FROM PARTS";  //$NON-NLS-1$
-
-        helpTestVisitor(getTestVDB(),
-            input, 
-            output);
-    }
     
     @Test public void testDayOfWeek() throws Exception {
         String input = "SELECT dayofweek(convert(PART_WEIGHT, timestamp)) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT (EXTRACT(DOW FROM cast(PARTS.PART_WEIGHT AS timestamp)) + 1) FROM PARTS";  //$NON-NLS-1$
+        String output = "SELECT CAST((EXTRACT(DOW FROM cast(PARTS.PART_WEIGHT AS timestamp)) + 1) AS integer) FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
             input, 
@@ -258,7 +262,7 @@ public class TestPostgreSQLTranslator {
     }
     @Test public void testDayOfMonth() throws Exception {
         String input = "SELECT dayofmonth(convert(PART_WEIGHT, timestamp)) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT EXTRACT(DAY FROM cast(PARTS.PART_WEIGHT AS timestamp)) FROM PARTS";  //$NON-NLS-1$
+        String output = "SELECT CAST(EXTRACT(DAY FROM cast(PARTS.PART_WEIGHT AS timestamp)) AS integer) FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
             input, 
@@ -266,7 +270,7 @@ public class TestPostgreSQLTranslator {
     }
     @Test public void testDayOfYear() throws Exception {
         String input = "SELECT dayofyear(convert(PART_WEIGHT, timestamp)) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT EXTRACT(DOY FROM cast(PARTS.PART_WEIGHT AS timestamp)) FROM PARTS";  //$NON-NLS-1$
+        String output = "SELECT CAST(EXTRACT(DOY FROM cast(PARTS.PART_WEIGHT AS timestamp)) AS integer) FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
             input, 
@@ -274,7 +278,7 @@ public class TestPostgreSQLTranslator {
     }
     @Test public void testHour() throws Exception {
         String input = "SELECT hour(convert(PART_WEIGHT, timestamp)) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT EXTRACT(HOUR FROM cast(PARTS.PART_WEIGHT AS timestamp)) FROM PARTS";  //$NON-NLS-1$
+        String output = "SELECT CAST(EXTRACT(HOUR FROM cast(PARTS.PART_WEIGHT AS timestamp)) AS integer) FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
             input, 
@@ -282,7 +286,7 @@ public class TestPostgreSQLTranslator {
     }
     @Test public void testMinute() throws Exception {
         String input = "SELECT minute(convert(PART_WEIGHT, timestamp)) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT EXTRACT(MINUTE FROM cast(PARTS.PART_WEIGHT AS timestamp)) FROM PARTS";  //$NON-NLS-1$
+        String output = "SELECT CAST(EXTRACT(MINUTE FROM cast(PARTS.PART_WEIGHT AS timestamp)) AS integer) FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
             input, 
@@ -290,7 +294,7 @@ public class TestPostgreSQLTranslator {
     }
     @Test public void testMonth() throws Exception {
         String input = "SELECT month(convert(PART_WEIGHT, timestamp)) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT EXTRACT(MONTH FROM cast(PARTS.PART_WEIGHT AS timestamp)) FROM PARTS";  //$NON-NLS-1$
+        String output = "SELECT CAST(EXTRACT(MONTH FROM cast(PARTS.PART_WEIGHT AS timestamp)) AS integer) FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
             input, 
@@ -298,7 +302,7 @@ public class TestPostgreSQLTranslator {
     }
     @Test public void testQuarter() throws Exception {
         String input = "SELECT quarter(convert(PART_WEIGHT, timestamp)) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT EXTRACT(QUARTER FROM cast(PARTS.PART_WEIGHT AS timestamp)) FROM PARTS";  //$NON-NLS-1$
+        String output = "SELECT CAST(EXTRACT(QUARTER FROM cast(PARTS.PART_WEIGHT AS timestamp)) AS integer) FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
             input, 
@@ -306,7 +310,7 @@ public class TestPostgreSQLTranslator {
     }
     @Test public void testSecond() throws Exception {
         String input = "SELECT second(convert(PART_WEIGHT, timestamp)) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT EXTRACT(SECOND FROM cast(PARTS.PART_WEIGHT AS timestamp)) FROM PARTS";  //$NON-NLS-1$
+        String output = "SELECT CAST(EXTRACT(SECOND FROM cast(PARTS.PART_WEIGHT AS timestamp)) AS integer) FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
             input, 
@@ -314,7 +318,7 @@ public class TestPostgreSQLTranslator {
     }
     @Test public void testWeek() throws Exception {
         String input = "SELECT week(convert(PART_WEIGHT, timestamp)) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT EXTRACT(WEEK FROM cast(PARTS.PART_WEIGHT AS timestamp)) FROM PARTS";  //$NON-NLS-1$
+        String output = "SELECT CAST(EXTRACT(WEEK FROM cast(PARTS.PART_WEIGHT AS timestamp)) AS integer) FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
             input, 
@@ -322,7 +326,7 @@ public class TestPostgreSQLTranslator {
     }
     @Test public void testYear() throws Exception {
         String input = "SELECT year(convert(PART_WEIGHT, timestamp)) FROM PARTS"; //$NON-NLS-1$
-        String output = "SELECT EXTRACT(YEAR FROM cast(PARTS.PART_WEIGHT AS timestamp)) FROM PARTS";  //$NON-NLS-1$
+        String output = "SELECT CAST(EXTRACT(YEAR FROM cast(PARTS.PART_WEIGHT AS timestamp)) AS integer) FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
             input, 
@@ -567,6 +571,51 @@ public class TestPostgreSQLTranslator {
         String output = "SELECT TO_CHAR(now(), 'MS'), TO_CHAR(now(), 'US') FROM PARTS";  //$NON-NLS-1$
 
         helpTestVisitor(getTestVDB(),
+            input, 
+            output);
+    }
+    
+    @Test public void testRecursiveCTE() throws Exception {
+        String input = "WITH p(n) as (select part_name as n from parts union select n from p) SELECT * FROM P"; //$NON-NLS-1$
+        String output = "WITH RECURSIVE p (n) AS (SELECT PARTS.PART_NAME AS n FROM PARTS UNION SELECT p.n FROM p) SELECT P.n FROM P";  //$NON-NLS-1$
+
+        helpTestVisitor(getTestVDB(),
+            input, 
+            output);
+    }
+    
+    @Test public void testGeometryFunctions() throws Exception {
+    	PostgreSQLExecutionFactory pgef = new PostgreSQLExecutionFactory();
+    	pgef.setPostGisVersion("1.5");
+    	pgef.setDatabaseVersion(Version.DEFAULT_VERSION);
+    	pgef.start();
+    	assertTrue(pgef.getSupportedFunctions().contains(SourceSystemFunctions.ST_ASBINARY));
+    	assertFalse(pgef.getSupportedFunctions().contains(SourceSystemFunctions.ST_GEOMFROMGEOJSON));
+    }
+    
+    @Test public void testBooleanConversion() throws Exception {
+        String input = "SELECT cast(bigdecimalvalue as boolean), cast(doublenum as boolean) from bqt1.smalla"; //$NON-NLS-1$
+        String output = "SELECT SmallA.BigDecimalValue <> 0, cast(SmallA.DoubleNum AS boolean) FROM SmallA";  //$NON-NLS-1$
+
+        helpTestVisitor(TranslationHelper.BQT_VDB,
+            input, 
+            output);
+    }
+    
+    @Test public void testSelectStringLiteral() throws Exception {
+        String input = "SELECT 'a' FROM PARTS"; //$NON-NLS-1$
+        String output = "SELECT cast('a' AS bpchar) FROM PARTS";  //$NON-NLS-1$
+
+        helpTestVisitor(getTestVDB(),
+            input, 
+            output);
+    }
+    
+    @Test public void testRound() throws Exception {
+        String input = "SELECT round(bigdecimalvalue, 2), round(doublenum, 3), round(doublenum, 0) from bqt1.smalla"; //$NON-NLS-1$
+        String output = "SELECT round(SmallA.BigDecimalValue, 2), round(cast(SmallA.DoubleNum AS decimal), 3), round(SmallA.DoubleNum) FROM SmallA";  //$NON-NLS-1$
+
+        helpTestVisitor(TranslationHelper.BQT_VDB,
             input, 
             output);
     }

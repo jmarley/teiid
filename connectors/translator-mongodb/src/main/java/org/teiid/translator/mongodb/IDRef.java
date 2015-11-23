@@ -21,18 +21,24 @@
  */
 package org.teiid.translator.mongodb;
 
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 
 import com.mongodb.BasicDBObject;
 
 public class IDRef implements Cloneable {
-	HashMap<String, Object> pk = new HashMap<String, Object>();
+	LinkedHashMap<String, Object> pk = new LinkedHashMap<String, Object>();
 
 	public void addColumn(String key, Object value) {
 		// only add if not added before
 		if (this.pk.get(key) == null) {
 			this.pk.put(key, value);
 		}
+	}
+
+	public List<String> getKeys(){
+	    return new ArrayList<String>(this.pk.keySet());
 	}
 
 	public Object getValue() {

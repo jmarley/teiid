@@ -32,6 +32,7 @@ import org.teiid.core.TeiidComponentException;
 import org.teiid.core.TeiidException;
 import org.teiid.core.TeiidRuntimeException;
 import org.teiid.core.types.DataTypeManager;
+import org.teiid.dqp.internal.process.DQPWorkContext;
 import org.teiid.query.QueryPlugin;
 import org.teiid.query.metadata.QueryMetadataInterface;
 import org.teiid.query.metadata.StoredProcedureInfo;
@@ -44,9 +45,11 @@ import org.teiid.query.resolver.util.ResolverUtil;
 import org.teiid.query.resolver.util.ResolverVisitor;
 import org.teiid.query.sql.LanguageObject;
 import org.teiid.query.sql.lang.*;
+import org.teiid.query.sql.lang.SetQuery.Operation;
 import org.teiid.query.sql.navigator.PostOrderNavigator;
 import org.teiid.query.sql.navigator.PreOrPostOrderNavigator;
 import org.teiid.query.sql.symbol.*;
+import org.teiid.query.sql.util.SymbolMap;
 import org.teiid.query.sql.visitor.ElementCollectorVisitor;
 import org.teiid.query.sql.visitor.ExpressionMappingVisitor;
 
@@ -124,7 +127,25 @@ public class SimpleQueryResolver implements CommandResolver {
             
             QueryResolver.setChildMetadata(queryExpression, query);
             
-            QueryResolver.resolveCommand(queryExpression, metadata.getMetadata(), false);
+            QueryCommand recursive = null;
+            
+            try {
+            	QueryResolver.resolveCommand(queryExpression, metadata.getMetadata(), false);
+            } catch (QueryResolverException e) {
+            	if (!(queryExpression instanceof SetQuery)) {
+            		throw e;
+            	}
+            	SetQuery setQuery = (SetQuery)queryExpression;
+            	//valid form must be a union with nothing above
+            	if (setQuery.getOperation() != Operation.UNION
+            			|| setQuery.getLimit() != null 
+            			|| setQuery.getOrderBy() != null 
+            			|| setQuery.getOption() != null) {
+            		throw e;
+            	}
+            	QueryResolver.resolveCommand(setQuery.getLeftQuery(), metadata.getMetadata(), false);
+            	recursive = setQuery.getRightQuery();
+            }
 
             if (!discoveredGroups.add(obj.getGroupSymbol())) {
             	 throw new QueryResolverException(QueryPlugin.Event.TEIID30101, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30101, obj.getGroupSymbol()));
@@ -157,6 +178,13 @@ public class SimpleQueryResolver implements CommandResolver {
             		es.setMetadataID(colid);
             		es.setGroupSymbol(obj.getGroupSymbol());
 				}
+            }
+            
+            if (recursive != null) {
+            	QueryResolver.setChildMetadata(recursive, query);
+            	QueryResolver.resolveCommand(recursive, metadata.getMetadata(), false);
+            	new SetQueryResolver().resolveSetQuery(metadata, false, (SetQuery)queryExpression, ((SetQuery)queryExpression).getLeftQuery(), recursive);
+            	obj.setRecursive(true);
             }
         }
 	}
@@ -210,7 +238,26 @@ public class SimpleQueryResolver implements CommandResolver {
             visitNode(obj.getCriteria());
             visitNode(obj.getGroupBy());
             visitNode(obj.getHaving());
-            visitNode(obj.getSelect()); 
+            visitNode(obj.getSelect());
+            GroupBy groupBy = obj.getGroupBy();
+            if (groupBy != null) {
+            	Object var = DQPWorkContext.getWorkContext().getSession().getSessionVariables().get("resolve_groupby_positional"); //$NON-NLS-1$
+            	if (Boolean.TRUE.equals(var)) {
+	            	for (int i = 0; i < groupBy.getCount(); i++) {
+	            		List<Expression> select = obj.getSelect().getProjectedSymbols();
+	            		Expression ex = groupBy.getSymbols().get(i);
+	            		ex = SymbolMap.getExpression(ex);
+	            		if (ex instanceof Constant && ex.getType() == DataTypeManager.DefaultDataClasses.INTEGER) {
+	            			Integer val = (Integer) ((Constant)ex).getValue();
+	            			if (val != null && val > 0 && val <= select.size()) {
+	            				Expression selectExpression = select.get(val - 1);
+	            				selectExpression = SymbolMap.getExpression(selectExpression);
+	            				groupBy.getSymbols().set(i, (Expression) selectExpression.clone());
+	            			}
+	            		}
+	            	}
+            	}
+            }
             visitNode(obj.getLimit());
         }
         

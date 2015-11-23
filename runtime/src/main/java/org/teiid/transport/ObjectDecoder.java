@@ -28,14 +28,13 @@ import java.io.OutputStream;
 import java.io.StreamCorruptedException;
 import java.util.List;
 
-import org.jboss.netty.buffer.ChannelBuffer;
-import org.jboss.netty.buffer.ChannelBufferInputStream;
-import org.jboss.netty.channel.Channel;
-import org.jboss.netty.channel.ChannelHandlerContext;
-import org.jboss.netty.handler.codec.frame.LengthFieldBasedFrameDecoder;
-import org.jboss.netty.handler.codec.serialization.CompatibleObjectDecoder;
-import org.jboss.netty.handler.codec.serialization.CompatibleObjectEncoder;
-import org.jboss.netty.handler.codec.serialization.ObjectEncoder;
+import io.netty.buffer.ByteBuf;
+import io.netty.buffer.ByteBufInputStream;
+import io.netty.channel.ChannelHandlerContext;
+import io.netty.handler.codec.LengthFieldBasedFrameDecoder;
+import io.netty.handler.codec.serialization.CompatibleObjectEncoder;
+import io.netty.handler.codec.serialization.ObjectEncoder;
+
 import org.teiid.common.buffer.FileStore;
 import org.teiid.common.buffer.FileStoreInputStreamFactory;
 import org.teiid.common.buffer.StorageManager;
@@ -85,6 +84,10 @@ public class ObjectDecoder extends LengthFieldBasedFrameDecoder {
     private FileStore store;
     private StreamCorruptedException error;
 
+    private int streamDataToRead = -1;
+    
+	private long maxLobSize = MAX_LOB_SIZE;
+
     /**
      * Creates a new decoder with the specified maximum object size.
      *
@@ -95,58 +98,69 @@ public class ObjectDecoder extends LengthFieldBasedFrameDecoder {
      * @param classLoader    the {@link ClassLoader} which will load the class
      *                       of the serialized object
      */
-    public ObjectDecoder(int maxObjectSize, ClassLoader classLoader, StorageManager storageManager) {
+    public ObjectDecoder(int maxObjectSize, long maxLobSize, ClassLoader classLoader, StorageManager storageManager) {
     	super(maxObjectSize, 0, 4, 0, 4);
         this.classLoader = classLoader;
         this.storageManager = storageManager;
+        this.maxLobSize = maxLobSize;
     }
 
     @Override
-    protected Object decode(
-            ChannelHandlerContext ctx, Channel channel, ChannelBuffer buffer) throws Exception {
+    protected Object decode(ChannelHandlerContext ctx, ByteBuf buffer) throws Exception {
     	if (result == null) {
-    		ChannelBuffer frame = (ChannelBuffer) super.decode(ctx, channel, buffer);
+    	    ByteBuf frame = (ByteBuf) super.decode(ctx, buffer);
             if (frame == null) {
                 return null;
             }
 	        CompactObjectInputStream cois = new CompactObjectInputStream(
-	                new ChannelBufferInputStream(frame), classLoader);
+	                new ByteBufInputStream(frame), classLoader);
 	        result = cois.readObject();
 	        streams = ExternalizeUtil.readList(cois, StreamFactoryReference.class);
 	        streamIndex = 0;
     	}
     	while (streamIndex < streams.size()) {
-	    	if (buffer.readableBytes() < 2) {
-	            return null;
-	        }
-	        int dataLen = buffer.getShort(buffer.readerIndex()) & 0xffff;
-	        if (buffer.readableBytes() < dataLen + 2) {
-	            return null;
-	        }
-	        buffer.skipBytes(2);
-	        
+    		//read the new chunk size
+	    	if (streamDataToRead == -1) {
+	    		if (buffer.readableBytes() < 2) {
+		            return null;
+		        }	
+		        streamDataToRead = buffer.readUnsignedShort();
+	    	}
 	        if (stream == null) {
 	        	store = storageManager.createFileStore("temp-stream"); //$NON-NLS-1$
 		        StreamFactoryReference sfr = streams.get(streamIndex);
 		        sfr.setStreamFactory(new FileStoreInputStreamFactory(store, Streamable.ENCODING));
 		        this.stream = new BufferedOutputStream(store.createOutputStream());
 	        }
-	        if (dataLen == 0) {
+	        //end of stream
+	        if (streamDataToRead == 0) {
 	        	stream.close();
 	        	stream = null;
 	        	streamIndex++;
+	        	streamDataToRead = -1;
 		        continue;
 	        }
-	        if (store.getLength() + dataLen > MAX_LOB_SIZE) {
+	        if (store.getLength() + streamDataToRead > maxLobSize) {
 	        	if (error == null) {
 		        	error = new StreamCorruptedException(
-		                    "lob too big: " + store.getLength() + dataLen + " (max: " + MAX_LOB_SIZE + ')'); //$NON-NLS-1$ //$NON-NLS-2$
+		                    "lob too big: " + (store.getLength() + streamDataToRead) + " (max: " + maxLobSize + ')'); //$NON-NLS-1$ //$NON-NLS-2$
 	        	}
 	        }
 	        if (error == null) {
-	        	buffer.readBytes(this.stream, dataLen);
+	        	int toRead = Math.min(buffer.readableBytes(), streamDataToRead);
+	        	if (toRead == 0) {
+	        		return null;
+	        	}
+	        	buffer.readBytes(this.stream, toRead);
+	        	streamDataToRead -= toRead;
+	        	if (streamDataToRead == 0) {
+	        		//get the next chunk
+	        		streamDataToRead = -1;
+	        	}
 	        } else {
-	        	buffer.skipBytes(dataLen);
+	        	buffer.release();
+	        	streamDataToRead = -1;
+	        	break;
 	        }
     	}
         Object toReturn = result;
@@ -162,9 +176,10 @@ public class ObjectDecoder extends LengthFieldBasedFrameDecoder {
         return toReturn;
     }
 
+    /*
     @Override
-    protected ChannelBuffer extractFrame(ChannelBuffer buffer, int index, int length) {
+    protected ByteBuf extractFrame(ChannelHandlerContext ctx, ByteBuf buffer, int index, int length) {
         return buffer.slice(index, length);
     }
-
+    */
 }

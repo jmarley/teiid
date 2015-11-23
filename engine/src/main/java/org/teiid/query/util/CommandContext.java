@@ -22,14 +22,20 @@
 
 package org.teiid.query.util;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.io.Serializable;
 import java.lang.ref.WeakReference;
+import java.sql.Clob;
 import java.sql.SQLException;
 import java.text.DecimalFormat;
 import java.text.SimpleDateFormat;
 import java.util.*;
+import java.util.AbstractMap.SimpleEntry;
+import java.util.Map.Entry;
 import java.util.concurrent.Executor;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.regex.Pattern;
 
 import javax.security.auth.Subject;
 
@@ -42,6 +48,8 @@ import org.teiid.common.buffer.BufferManager;
 import org.teiid.common.buffer.TupleSource;
 import org.teiid.core.TeiidComponentException;
 import org.teiid.core.TeiidException;
+import org.teiid.core.types.ClobImpl;
+import org.teiid.core.types.InputStreamFactory;
 import org.teiid.core.util.ArgCheck;
 import org.teiid.core.util.ExecutorUtils;
 import org.teiid.core.util.LRUCache;
@@ -170,6 +178,7 @@ public class CommandContext implements Cloneable, org.teiid.CommandContext {
 	    Set<CommandListener> commandListeners = null;
 	    private LRUCache<String, DecimalFormat> decimalFormatCache;
 		private LRUCache<String, SimpleDateFormat> dateFormatCache;
+		private LRUCache<Entry<String,Integer>, Pattern> patternCache;
 		private AtomicLong reuseCount = null;
 		
 	    private List<Exception> warnings = null;
@@ -183,6 +192,8 @@ public class CommandContext implements Cloneable, org.teiid.CommandContext {
 		
 		private Map<LookupKey, TupleSource> lookups;
 		private TempTableStore sessionTempTableStore;
+		
+		private Set<InputStreamFactory> created = Collections.newSetFromMap(new WeakHashMap<InputStreamFactory, Boolean>());
 	}
 	
 	private GlobalState globalState = new GlobalState();
@@ -772,6 +783,15 @@ public class CommandContext implements Cloneable, org.teiid.CommandContext {
 				}
 				this.globalState.lookups = null;
 			}
+			if (this.globalState.created != null) {
+				for (InputStreamFactory isf : this.globalState.created) {
+					try {
+						isf.free();
+					} catch (IOException e) {
+					}
+				}
+				this.globalState.created.clear();
+			}
 		}
 	}
 
@@ -834,6 +854,33 @@ public class CommandContext implements Cloneable, org.teiid.CommandContext {
 		}
 		return result;
 	}
+
+    /**
+     * Compile a regular expression into a {@link java.util.regex.Pattern} and cache it in
+     * the {@link CommandContext} for future use.
+     *
+     * @param context
+     * @param regex Regular expression.
+     * @param flags Bitmask flags like {@link java.util.regex.Pattern#CASE_INSENSITIVE}.
+     * @return Compiled regex.
+     */
+    public static Pattern getPattern(CommandContext context, String regex, int flags) {
+        Pattern result = null;
+        if (context != null) {
+            if (context.globalState.patternCache == null) {
+                context.globalState.patternCache = new LRUCache<Entry<String,Integer>,Pattern>(32);
+            } else {
+                result = context.globalState.patternCache.get(new SimpleEntry(result, flags));
+            }
+        }
+        if (result == null) {
+            result = Pattern.compile(regex, flags);
+            if (context != null) {
+                context.globalState.patternCache.put(new SimpleEntry(result, flags), result);
+            }
+        }
+        return result;
+    }
 	
 	public void incrementReuseCount() {
 		globalState.reuseCount.getAndIncrement();
@@ -1044,6 +1091,30 @@ public class CommandContext implements Cloneable, org.teiid.CommandContext {
 				throw new TeiidSQLException();
 			}
 		};
+	}
+	
+	/**
+	 * Used by the system table logic
+	 * @return
+	 */
+	public Clob getSpatialRefSys() {
+		return new ClobImpl(new InputStreamFactory() {
+			
+			@Override
+			public InputStream getInputStream() throws IOException {
+				return getClass().getClassLoader().getResourceAsStream("org/teiid/metadata/spatial_ref_sys.csv"); //$NON-NLS-1$
+			}
+		}, -1);
+	}
+
+	public void addCreatedLob(InputStreamFactory isf) {
+		if (this.globalState.created != null) {
+			this.globalState.created.add(isf);
+		}
+	}
+
+	public void disableAutoCleanLobs() {
+		this.globalState.created = null;
 	}
 	
 }

@@ -28,6 +28,51 @@
         </excludes>      
     </fileSet>
   </fileSets>
+
+  <dependencySets>
+     <dependencySet>
+        <includes>
+          <include>org.slf4j:slf4j-api:jar</include>
+        </includes>
+        <outputDirectory>optional</outputDirectory>
+        <unpack>false</unpack>
+        <useTransitiveDependencies>true</useTransitiveDependencies>
+        <scope>provided</scope>
+     </dependencySet>
+      <dependencySet>
+        <includes>
+          <include>com.h2database:h2:jar</include>
+        </includes>
+        <outputDirectory>optional/jdbc/h2</outputDirectory>
+        <unpack>false</unpack>
+        <useTransitiveDependencies>false</useTransitiveDependencies>
+        <scope>provided</scope>
+      </dependencySet>
+      <dependencySet>
+          <includes>
+             <include>org.jboss.narayana.jta:narayana-jta:jar</include>
+          </includes>
+          <outputDirectory>lib</outputDirectory>
+          <unpack>false</unpack>
+          <useTransitiveDependencies>false</useTransitiveDependencies>
+          <scope>provided</scope>
+      </dependencySet>
+      <dependencySet>
+          <includes>
+              <include>org.jboss.ironjacamar:ironjacamar-jdbc:jar</include>
+              <include>org.jboss.ironjacamar:ironjacamar-core-api:jar</include>
+              <include>org.jboss.ironjacamar:ironjacamar-core-impl:jar</include>
+              <include>org.jboss.ironjacamar:ironjacamar-common-api:jar</include>
+              <include>org.jboss.ironjacamar:ironjacamar-common-impl:jar</include>
+              <include>org.jboss.ironjacamar:ironjacamar-common-spi:jar</include>
+              <include>org.jboss.ironjacamar:ironjacamar-spec-api:jar</include>
+              <include>org.jboss:jboss-transaction-spi:jar</include>
+          </includes>
+          <outputDirectory>optional/jdbc/tm</outputDirectory>
+          <unpack>false</unpack>
+          <scope>provided</scope>
+       </dependencySet>
+   </dependencySets>
   
   <moduleSets>
     
@@ -90,6 +135,10 @@
         <includes>
             <include>org.jboss.teiid.connectors:connector-*</include>
         </includes>
+        
+        <excludes>
+            <exclude>org.jboss.teiid.connectors:connector-salesforce-34</exclude>
+        </excludes>
                 
         <binaries> 
           <includeDependencies>false</includeDependencies>
@@ -110,6 +159,10 @@
         <includes>
             <include>org.jboss.teiid.connectors:translator-*</include>
         </includes>
+        
+        <excludes>
+            <exclude>org.jboss.teiid.connectors:translator-salesforce-34</exclude>
+        </excludes>
                 
         <binaries> 
           <includeDependencies>false</includeDependencies>

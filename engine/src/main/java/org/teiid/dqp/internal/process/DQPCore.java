@@ -24,6 +24,7 @@ package org.teiid.dqp.internal.process;
 
 import java.lang.ref.WeakReference;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedList;
@@ -44,6 +45,7 @@ import org.teiid.adminapi.VDB.Status;
 import org.teiid.adminapi.impl.RequestMetadata;
 import org.teiid.adminapi.impl.SessionMetadata;
 import org.teiid.adminapi.impl.TransactionMetadata;
+import org.teiid.adminapi.impl.VDBMetaData;
 import org.teiid.adminapi.impl.WorkerPoolStatisticsMetadata;
 import org.teiid.client.DQP;
 import org.teiid.client.RequestMessage;
@@ -231,7 +233,12 @@ public class DQPCore implements DQP {
     	return results;
 	}    
 
-	public ResultsFuture<ResultsMessage> executeRequest(long reqID,RequestMessage requestMsg) throws TeiidProcessingException {
+    @Override
+    public ResultsFuture<ResultsMessage> executeRequest(long reqID,RequestMessage requestMsg) throws TeiidProcessingException {
+    	return executeRequest(reqID, requestMsg, null);
+    }
+    
+	public ResultsFuture<ResultsMessage> executeRequest(long reqID,RequestMessage requestMsg, Long queryTimeout) throws TeiidProcessingException {
     	DQPWorkContext workContext = DQPWorkContext.getWorkContext();
     	checkActive(workContext);
 		RequestID requestID = workContext.getRequestID(reqID);
@@ -253,13 +260,17 @@ public class DQPCore implements DQP {
 	    request.setExecutor(this.processWorkerPool);
 		request.setResultSetCacheEnabled(this.rsCache != null);
 		request.setAuthorizationValidator(this.authorizationValidator);
+		request.setPreParser(this.config.getPreParser());
 		request.setUserRequestConcurrency(this.getUserRequestSourceConcurrency());
         ResultsFuture<ResultsMessage> resultsFuture = new ResultsFuture<ResultsMessage>();
         final RequestWorkItem workItem = new RequestWorkItem(this, requestMsg, request, resultsFuture.getResultsReceiver(), requestID, workContext);
-    	logMMCommand(workItem, Event.NEW, null); 
+    	logMMCommand(workItem, Event.NEW, null, null); 
         addRequest(requestID, workItem, state);
         long timeout = workContext.getVDB().getQueryTimeout();
         timeout = Math.min(timeout>0?timeout:Long.MAX_VALUE, config.getQueryTimeout()>0?config.getQueryTimeout():Long.MAX_VALUE);
+        if (queryTimeout != null && queryTimeout > 0) {
+        	timeout = Math.min(timeout>0?timeout:Long.MAX_VALUE, queryTimeout);
+        }
         if (timeout < Long.MAX_VALUE) {
         	final long finalTimeout = timeout;
         	workItem.setCancelTask(this.cancellationTimer.add(new Runnable() {
@@ -337,6 +348,9 @@ public class DQPCore implements DQP {
 				startActivePlan(work, true);
 			}
 		}
+    	if (LogManager.isMessageToBeRecorded(LogConstants.CTX_DQP, MessageLevel.DETAIL)) {
+            LogManager.logDetail(LogConstants.CTX_DQP, workItem.requestID, "Finished Processing");  //$NON-NLS-1$
+        }
     }
     
     public int getActivePlanCount() {
@@ -487,7 +501,7 @@ public class DQPCore implements DQP {
         	markCancelled = workItem.requestCancel();
         }
     	if (markCancelled) {
-            logMMCommand(workItem, Event.CANCEL, null);
+            logMMCommand(workItem, Event.CANCEL, null, null);
     	} else {
     		LogManager.logDetail(LogConstants.CTX_DQP, QueryPlugin.Util.getString("DQPCore.failed_to_cancel")); //$NON-NLS-1$
     	}
@@ -526,8 +540,8 @@ public class DQPCore implements DQP {
 		this.transactionService.terminateTransaction(xid);
 	}	
 	
-    void logMMCommand(RequestWorkItem workItem, Event status, Integer rowCount) {
-    	if ((status != Event.PLAN && !LogManager.isMessageToBeRecorded(LogConstants.CTX_COMMANDLOGGING, MessageLevel.DETAIL))
+    void logMMCommand(RequestWorkItem workItem, Event status, Integer rowCount, Long cpuTime) {
+    	if ((status != Event.PLAN && !LogManager.isMessageToBeRecorded(LogConstants.CTX_COMMANDLOGGING, MessageLevel.INFO))
     			|| (status == Event.PLAN && !LogManager.isMessageToBeRecorded(LogConstants.CTX_COMMANDLOGGING, MessageLevel.TRACE))) {
     		return;
     	}
@@ -544,7 +558,7 @@ public class DQPCore implements DQP {
         // Log to request log
         CommandLogMessage message = null;
         if (status == Event.NEW) {
-            message = new CommandLogMessage(System.currentTimeMillis(), rID.toString(), txnID, workContext.getSessionId(), appName, workContext.getUserName(), workContext.getVdbName(), workContext.getVdbVersion(), msg.getCommandString());
+            message = new CommandLogMessage(System.currentTimeMillis(), rID.toString(), txnID, workContext.getSessionId(), appName, workContext.getUserName(), workContext.getVdbName(), workContext.getVdbVersion(), msg.getCommandString(), cpuTime);
         } else {
             QueryProcessor qp = workItem.getProcessor();
             PlanNode plan = null;
@@ -553,7 +567,7 @@ public class DQPCore implements DQP {
             }
             message = new CommandLogMessage(System.currentTimeMillis(), rID.toString(), txnID, workContext.getSessionId(), workContext.getUserName(), workContext.getVdbName(), workContext.getVdbVersion(), rowCount, status, plan);
         }
-        LogManager.log(status == Event.PLAN?MessageLevel.TRACE:MessageLevel.DETAIL, LogConstants.CTX_COMMANDLOGGING, message);
+        LogManager.log(status == Event.PLAN?MessageLevel.TRACE:MessageLevel.INFO, LogConstants.CTX_COMMANDLOGGING, message);
     }
     
     public TempTableDataManager getDataTierManager() {
@@ -644,6 +658,7 @@ public class DQPCore implements DQP {
         options.setProperties(System.getProperties());
         PropertiesUtils.setBeanProperties(options, options.getProperties(), "org.teiid", true); //$NON-NLS-1$
         LogManager.logDetail(LogConstants.CTX_DQP, "DQPCore started maxThreads", this.config.getMaxThreads(), "maxActivePlans", this.maxActivePlans, "source concurrency", this.userRequestSourceConcurrency); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        this.bufferManager.setOptions(options);
 	}
 	
 	public void setBufferManager(BufferManager mgr) {
@@ -815,7 +830,7 @@ public class DQPCore implements DQP {
 	private void checkActive(DQPWorkContext workContext)
 			throws TeiidProcessingException {
 		if (workContext.getVDB().getStatus() != Status.ACTIVE) {
-			throw new TeiidProcessingException(QueryPlugin.Event.TEIID31099, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31099, workContext.getVDB()));
+			throw new TeiidProcessingException(QueryPlugin.Event.TEIID31099, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31099, workContext.getVDB(), workContext.getVDB().getStatus()));
 		}
 	}
 	
@@ -857,5 +872,113 @@ public class DQPCore implements DQP {
 	
 	public String getRuntimeVersion() {
 		return ApplicationInfo.getInstance().getBuildNumber();
-	}	
+	}
+	
+	public interface ResultsListener {
+	    void onResults(List<String> columns,  List<? extends List<?>> results) throws Exception;
+	}
+
+	/**
+	 * Execute the given query asynchly. Has a hard limit of only returning max rows fetch size rows.
+	 * @param command
+	 * @param vdb
+	 * @param user
+	 * @param app
+	 * @param timeoutInMilli
+	 * @param engine
+	 * @param listener
+	 * @return
+	 * @throws Throwable
+	 */
+    public static ResultsFuture<?> executeQuery(final String command, final VDBMetaData vdb, final String user, final String app,
+            final long timeoutInMilli, final DQPCore engine, final ResultsListener listener) throws Throwable {
+        final SessionMetadata session = TempTableDataManager.createTemporarySession(user, app, vdb); 
+
+        final long requestID =  0L;
+
+        DQPWorkContext workContext = new DQPWorkContext();
+        workContext.setUseCallingThread(true);
+        workContext.setSession(session);
+        workContext.setAdmin(true);
+
+        final ResultsFuture<Void> resultFuture = new ResultsFuture<Void>();
+        resultFuture.addCompletionListener(new ResultsFuture.CompletionListener<Void>() {
+        	
+        	@SuppressWarnings("unchecked")
+			@Override
+        	public void onCompletion(ResultsFuture<Void> future) {
+                ResultsFuture<?> response;
+				try {
+					response = engine.closeRequest(requestID);
+	                response.addCompletionListener(new ResultsFuture.CompletionListener() {
+	                	@Override
+	                	public void onCompletion(ResultsFuture future) {
+	                          engine.terminateSession(session.getSessionId());
+	              		  	}		                    		
+	                	}
+	    			);
+				} catch (Exception e) {
+					engine.terminateSession(session.getSessionId());
+				}
+        	}
+		});
+        
+        workContext.runInContext(new Callable<Void>() {
+            @Override
+            public Void call() throws Exception {
+                RequestMessage request = new RequestMessage(command);
+                request.setExecutionId(requestID);
+                request.setRowLimit(engine.getMaxRowsFetchSize()); // this would limit the number of rows that are returned.
+                ResultsFuture<ResultsMessage> message = engine.executeRequest(requestID, request, timeoutInMilli);
+                message.addCompletionListener(new ResultsFuture.CompletionListener<ResultsMessage>() {
+                	
+                	@Override
+                	public void onCompletion(
+                			ResultsFuture<ResultsMessage> future) {
+                		try {
+							ResultsMessage rm = future.get();
+		                    if (rm.getException() != null) {
+		                         throw rm.getException();
+		                    }
+		                    if (rm.isUpdateResult()) {
+		                        listener.onResults(Arrays.asList("update-count"), rm.getResultsList()); //$NON-NLS-1$
+		                        resultFuture.getResultsReceiver().receiveResults(null);
+		                    }
+		                    else {
+		                        processResult(rm);
+		                    }
+						} catch (Exception e) {
+							resultFuture.getResultsReceiver().exceptionOccurred(e);
+						}
+                	}
+
+					private void processResult(ResultsMessage rm) throws Exception {
+						if (rm.getException() != null) {
+	                         throw rm.getException();
+	                    }
+						listener.onResults(Arrays.asList(rm.getColumnNames()), rm.getResultsList());
+
+						if (rm.getFinalRow() == -1 || rm.getLastRow() < rm.getFinalRow()) {
+						    ResultsFuture<ResultsMessage> next = engine.processCursorRequest(requestID, rm.getLastRow()+1, 1024);
+						    next.addCompletionListener(new ResultsFuture.CompletionListener<ResultsMessage>() {
+						    	@Override
+						    	public void onCompletion(
+						    			ResultsFuture<ResultsMessage> future) {
+						    		try {
+										processResult(future.get());
+									} catch (Exception e) {
+										resultFuture.getResultsReceiver().exceptionOccurred(e);
+									}
+						    	}
+							});
+						} else {
+							resultFuture.getResultsReceiver().receiveResults(null);
+						}
+					}
+				});
+                return null;
+            }
+        });
+        return resultFuture;
+	}
 }

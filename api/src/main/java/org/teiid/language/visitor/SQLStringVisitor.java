@@ -60,7 +60,7 @@ public class SQLStringVisitor extends AbstractLanguageVisitor {
     
     protected StringBuilder buffer = new StringBuilder();
     private boolean appendedSourceComment;
-    private boolean shortNameOnly = false;
+    protected boolean shortNameOnly = false;
                 
     /**
      * Gets the name of a group or element from the RuntimeMetadata
@@ -71,12 +71,13 @@ public class SQLStringVisitor extends AbstractLanguageVisitor {
         return getRecordName(object);
     }
 
+    /**
+	 * Get the name in source or the name if
+	 * the name in source is not set.
+	 * @return
+	 */
 	public static String getRecordName(AbstractMetadataRecord object) {
-		String nameInSource = object.getNameInSource();
-        if(nameInSource != null && nameInSource.length() > 0) {
-            return nameInSource;
-        }
-        return object.getName();
+		return object.getSourceName();
     }
     
     /**
@@ -486,7 +487,7 @@ public class SQLStringVisitor extends AbstractLanguageVisitor {
     }
 
     public void visit(Insert obj) {
-    	buffer.append(INSERT).append(Tokens.SPACE);
+    	buffer.append(getInsertKeyword()).append(Tokens.SPACE);
 		appendSourceComment(obj);
 		buffer.append(INTO).append(Tokens.SPACE);
 		append(obj.getTable());
@@ -500,6 +501,10 @@ public class SQLStringVisitor extends AbstractLanguageVisitor {
         buffer.append(Tokens.SPACE);
         append(obj.getValueSource());
     }
+
+	protected String getInsertKeyword() {
+		return INSERT;
+	}
     
     @Override
 	public void visit(ExpressionValueSource obj) {
@@ -647,34 +652,38 @@ public class SQLStringVisitor extends AbstractLanguageVisitor {
             buffer.append(NULL);
         } else {
             Class<?> type = obj.getType();
-            String val = obj.getValue().toString();
-            if(Number.class.isAssignableFrom(type)) {
-                buffer.append(val);
-            } else if(type.equals(DataTypeManager.DefaultDataClasses.BOOLEAN)) {
-            	buffer.append(obj.getValue().equals(Boolean.TRUE) ? TRUE : FALSE);
-            } else if(type.equals(DataTypeManager.DefaultDataClasses.TIMESTAMP)) {
-                buffer.append("{ts '") //$NON-NLS-1$
-                      .append(val)
-                      .append("'}"); //$NON-NLS-1$
-            } else if(type.equals(DataTypeManager.DefaultDataClasses.TIME)) {
-                buffer.append("{t '") //$NON-NLS-1$
-                      .append(val)
-                      .append("'}"); //$NON-NLS-1$
-            } else if(type.equals(DataTypeManager.DefaultDataClasses.DATE)) {
-                buffer.append("{d '") //$NON-NLS-1$
-                      .append(val)
-                      .append("'}"); //$NON-NLS-1$
-            } else if (type.equals(DataTypeManager.DefaultDataClasses.VARBINARY)) {
-            	buffer.append("X'") //$NON-NLS-1$
-            		  .append(val)
-            		  .append("'"); //$NON-NLS-1$
-            } else {
-                buffer.append(Tokens.QUOTE)
-                      .append(escapeString(val, Tokens.QUOTE))
-                      .append(Tokens.QUOTE);
-            }
+            appendLiteral(obj, type);
         }
     }
+
+	protected void appendLiteral(Literal obj, Class<?> type) {
+		String val = obj.getValue().toString();
+		if(Number.class.isAssignableFrom(type)) {
+		    buffer.append(val);
+		} else if(type.equals(DataTypeManager.DefaultDataClasses.BOOLEAN)) {
+			buffer.append(obj.getValue().equals(Boolean.TRUE) ? TRUE : FALSE);
+		} else if(type.equals(DataTypeManager.DefaultDataClasses.TIMESTAMP)) {
+		    buffer.append("{ts '") //$NON-NLS-1$
+		          .append(val)
+		          .append("'}"); //$NON-NLS-1$
+		} else if(type.equals(DataTypeManager.DefaultDataClasses.TIME)) {
+		    buffer.append("{t '") //$NON-NLS-1$
+		          .append(val)
+		          .append("'}"); //$NON-NLS-1$
+		} else if(type.equals(DataTypeManager.DefaultDataClasses.DATE)) {
+		    buffer.append("{d '") //$NON-NLS-1$
+		          .append(val)
+		          .append("'}"); //$NON-NLS-1$
+		} else if (type.equals(DataTypeManager.DefaultDataClasses.VARBINARY)) {
+			buffer.append("X'") //$NON-NLS-1$
+				  .append(val)
+				  .append("'"); //$NON-NLS-1$
+		} else {
+		    buffer.append(Tokens.QUOTE)
+		          .append(escapeString(val, Tokens.QUOTE))
+		          .append(Tokens.QUOTE);
+		}
+	}
 
     public void visit(Not obj) {
         buffer.append(NOT)
@@ -856,7 +865,9 @@ public class SQLStringVisitor extends AbstractLanguageVisitor {
     }
     
     public void visit(SetClause clause) {
-        buffer.append(getElementName(clause.getSymbol(), false));
+        shortNameOnly = true;
+        append(clause.getSymbol());
+        shortNameOnly = false;
         buffer.append(Tokens.SPACE).append(Tokens.EQ).append(Tokens.SPACE);
         append(clause.getValue());
     }
@@ -919,14 +930,18 @@ public class SQLStringVisitor extends AbstractLanguageVisitor {
     @Override
     public void visit(With obj) {
     	appendedSourceComment = true;
-    	buffer.append(WITH);
+    	appendWithKeyword(obj);
     	buffer.append(Tokens.SPACE);
     	append(obj.getItems());
     	buffer.append(Tokens.SPACE);
     	appendedSourceComment = false;
     }
     
-    @Override
+    protected void appendWithKeyword(With obj) {
+    	buffer.append(WITH);		
+	}
+
+	@Override
     public void visit(WithItem obj) {
     	append(obj.getTable());
     	buffer.append(Tokens.SPACE);

@@ -25,7 +25,14 @@ package org.teiid.metadata;
 import java.io.Reader;
 import java.io.Serializable;
 import java.lang.reflect.Method;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.LinkedList;
+import java.util.List;
+import java.util.Map;
+import java.util.Properties;
+import java.util.TreeMap;
 
 import org.teiid.CommandContext;
 import org.teiid.adminapi.Model;
@@ -57,6 +64,9 @@ public class MetadataFactory implements Serializable {
 	private static final String TEIID_ACCUMULO = "teiid_accumulo"; //$NON-NLS-1$
 	private static final String TEIID_EXCEL = "teiid_excel"; //$NON-NLS-1$
 	private static final String TEIID_JPA = "teiid_jpa"; //$NON-NLS-1$
+	private static final String TEIID_HBASE = "teiid_hbase"; //$NON-NLS-1$
+	private static final String TEIID_SPATIAL = "teiid_spatial"; //$NON-NLS-1$
+	private static final String TEIID_LDAP = "teiid_ldap"; //$NON-NLS-1$
 
 	private static final long serialVersionUID = 8590341087771685630L;
 
@@ -76,8 +86,6 @@ public class MetadataFactory implements Serializable {
 	private transient ModelMetaData model;
 	private transient Map<String, ? extends VDBResource> vdbResources;
 	private List<Grant> grants;
-	private List<String> startTriggers;
-	private List<String> shutdownTriggers;
 
 	public static final String SF_URI = "{http://www.teiid.org/translator/salesforce/2012}"; //$NON-NLS-1$
 	public static final String WS_URI = "{http://www.teiid.org/translator/ws/2012}"; //$NON-NLS-1$
@@ -86,6 +94,10 @@ public class MetadataFactory implements Serializable {
 	public static final String ACCUMULO_URI = "{http://www.teiid.org/translator/accumulo/2013}"; //$NON-NLS-1$
 	public static final String EXCEL_URI = "{http://www.teiid.org/translator/excel/2014}"; //$NON-NLS-1$
 	public static final String JPA_URI = "{http://www.teiid.org/translator/jpa/2014}"; //$NON-NLS-1$
+	public static final String HBASE_URI = "{http://www.teiid.org/translator/hbase/2014}"; //$NON-NLS-1$
+	public static final String SPATIAL_URI = "{http://www.teiid.org/translator/spatial/2015}"; //$NON-NLS-1$
+	public static final String LDAP_URI = "{http://www.teiid.org/translator/ldap/2015}"; //$NON-NLS-1$
+	
 
 	public static final Map<String, String> BUILTIN_NAMESPACES;
 	static {
@@ -98,6 +110,9 @@ public class MetadataFactory implements Serializable {
 		map.put(TEIID_ACCUMULO, ACCUMULO_URI.substring(1, ACCUMULO_URI.length()-1));
 		map.put(TEIID_EXCEL, EXCEL_URI.substring(1, EXCEL_URI.length()-1));
 		map.put(TEIID_JPA, JPA_URI.substring(1, JPA_URI.length()-1));
+		map.put(TEIID_HBASE, HBASE_URI.substring(1, HBASE_URI.length()-1));
+		map.put(TEIID_SPATIAL, SPATIAL_URI.substring(1, SPATIAL_URI.length()-1));
+		map.put(TEIID_LDAP, LDAP_URI.substring(1, LDAP_URI.length()-1));
 		BUILTIN_NAMESPACES = Collections.unmodifiableMap(map);
 	}
 
@@ -117,6 +132,13 @@ public class MetadataFactory implements Serializable {
 		msb = longHash(schemaName, msb);
 		this.idPrefix = "tid:" + hex(msb, 12); //$NON-NLS-1$
 		setUUID(this.schema);
+		if (modelProperties != null) {
+			for (Map.Entry<Object, Object> entry : modelProperties.entrySet()) {
+				if (entry.getKey() instanceof String && entry.getValue() instanceof String) {
+					this.schema.setProperty(resolvePropertyKey(this, (String) entry.getKey()), (String) entry.getValue());
+				}
+			}
+		}
 		this.modelProperties = modelProperties;
 		this.rawMetadata = rawMetadata;
 	}
@@ -131,8 +153,8 @@ public class MetadataFactory implements Serializable {
 		return h;
 	}
 
-	private static String hex(long val, int hexLength) {
-		long hi = 1L << (hexLength * 4);
+	public static String hex(long val, int hexLength) {
+		long hi = 1L << (Math.min(63, hexLength * 4));
 		return Long.toHexString(hi | (val & (hi - 1))).substring(1);
     }
 
@@ -150,6 +172,11 @@ public class MetadataFactory implements Serializable {
 		return this.modelProperties;
 	}
 
+	/**
+	 * Get the metadata text for the first metadata element
+	 * @return
+	 */
+	@Deprecated
 	public String getRawMetadata() {
 		return this.rawMetadata;
 	}
@@ -203,7 +230,7 @@ public class MetadataFactory implements Serializable {
 		if (this.autoCorrectColumnNames) {
 			name.replace(AbstractMetadataRecord.NAME_DELIM_CHAR, '_');
 		} else if (name.indexOf(AbstractMetadataRecord.NAME_DELIM_CHAR) != -1) {
-			throw new MetadataException(DataPlugin.Event.TEIID60008, DataPlugin.Util.gs(DataPlugin.Event.TEIID60008, name));
+			throw new MetadataException(DataPlugin.Event.TEIID60008, DataPlugin.Util.gs(DataPlugin.Event.TEIID60008, table.getFullName(), name));
 		}
 		if (table.getColumnByName(name) != null) {
 			throw new DuplicateRecordException(DataPlugin.Event.TEIID60016, DataPlugin.Util.gs(DataPlugin.Event.TEIID60016, table.getFullName() + AbstractMetadataRecord.NAME_DELIM_CHAR + name));
@@ -213,20 +240,19 @@ public class MetadataFactory implements Serializable {
 		table.addColumn(column);
 		column.setParent(table);
 		column.setPosition(table.getColumns().size()); //1 based indexing
-		setColumnType(type, column);
+		setDataType(type, column, this.dataTypes, false);
 		setUUID(column);
 		return column;
 	}
 
-	private Datatype setColumnType(String type,
-			BaseColumn column) {
+	public static Datatype setDataType(String type, BaseColumn column, Map<String, Datatype> dataTypes, boolean allowNull) {
 		int arrayDimensions = 0;
 		while (DataTypeManager.isArrayType(type)) {
 			arrayDimensions++;
 			type = type.substring(0, type.length()-2);
 		}
-		Datatype datatype = this.dataTypes.get(type);
-		if (datatype == null) {
+		Datatype datatype = dataTypes.get(type);
+		if (datatype == null && (!allowNull || !DataTypeManager.DefaultDataTypes.NULL.equals(type))) {
 			//TODO: potentially we want to check the enterprise types, but at
 			//this point we're keying them by name, not runtime name (which
 			// is an awkward difference to start with)
@@ -344,7 +370,7 @@ public class MetadataFactory implements Serializable {
 	private void assignColumn(Table table, ColumnSet<?> columns, String columnName) {
 		Column column = table.getColumnByName(columnName);
 		if (column == null) {
-			throw new MetadataException(DataPlugin.Event.TEIID60011, DataPlugin.Util.gs(DataPlugin.Event.TEIID60011, columnName));
+			throw new MetadataException(DataPlugin.Event.TEIID60011, DataPlugin.Util.gs(DataPlugin.Event.TEIID60011, table.getFullName(), columnName));
 		}
 		columns.getColumns().add(column);
 	}
@@ -417,7 +443,7 @@ public class MetadataFactory implements Serializable {
 		setUUID(param);
 		param.setType(parameterType);
 		param.setProcedure(procedure);
-		setColumnType(type, param);
+		setDataType(type, param, this.dataTypes, false);
 		if (parameterType == Type.ReturnValue) {
 			procedure.getParameters().add(0, param);
 			for (int i = 0; i < procedure.getParameters().size(); i++) {
@@ -831,7 +857,27 @@ public class MetadataFactory implements Serializable {
 	public void addFunction(FunctionMethod functionMethod) {
 		functionMethod.setParent(this.schema);
 		setUUID(functionMethod);
+		for (FunctionParameter param : functionMethod.getInputParameters()) {
+			setUUID(param);
+		}
+		setUUID(functionMethod.getOutputParameter());
 		this.schema.addFunction(functionMethod);
+	}
+
+	public static String resolvePropertyKey(MetadataFactory factory, String key) {
+	 	int index = key.indexOf(':');
+	 	if (index > 0 && index < key.length() - 1) {
+	 		String prefix = key.substring(0, index);
+	 		String uri = BUILTIN_NAMESPACES.get(prefix);
+	 		if (uri == null) {
+	 			uri = factory.getNamespaces().get(prefix);
+	 		}
+	 		if (uri != null) {
+	 			key = '{' +uri + '}' + key.substring(index + 1, key.length());
+	 		}
+	 		//TODO warnings or errors if not resolvable 
+	 	}
+	 	return key;
 	}
 
 }

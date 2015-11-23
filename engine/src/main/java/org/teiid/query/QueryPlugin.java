@@ -387,7 +387,6 @@ public class QueryPlugin { // extends Plugin {
 		TEIID30443,
 		TEIID30444,
 		TEIID30445,
-		TEIID30446,
 		TEIID30447,
 		TEIID30448,
 		TEIID30449,
@@ -563,6 +562,27 @@ public class QueryPlugin { // extends Plugin {
     	TEIID31149, 
     	TEIID31150,
     	TEIID31151, 
-    	TEIID31152
+    	TEIID31152, 
+    	TEIID31153, 
+    	TEIID31154,
+    	TEIID31155, 
+    	TEIID31156, 
+    	TEIID31157, 
+    	TEIID31158, 
+    	TEIID31159, 
+    	TEIID31160, 
+    	TEIID31161,
+    	TEIID31162, // Missing proj4 text.
+    	TEIID31163, // Failed to lookup proj4 text.
+    	TEIID31164, // Unsupported geometry type.
+    	TEIID31165, 
+    	TEIID31166,
+    	TEIID31167,
+    	TEIID31168, // Unsupported regex flag.
+    	TEIID31169,  // out of range
+    	TEIID31170, 
+    	TEIID31171, 
+    	TEIID31172,
+    	TEIID31173
 	}
 }

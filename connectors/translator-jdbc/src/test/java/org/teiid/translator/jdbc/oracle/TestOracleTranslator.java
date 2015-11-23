@@ -71,6 +71,7 @@ import org.teiid.translator.jdbc.JDBCQueryExecution;
 import org.teiid.translator.jdbc.SQLConversionVisitor;
 import org.teiid.translator.jdbc.TranslatedCommand;
 import org.teiid.translator.jdbc.TranslationHelper;
+import org.teiid.translator.jdbc.Version;
 
 @SuppressWarnings("nls")
 public class TestOracleTranslator {
@@ -83,6 +84,7 @@ public class TestOracleTranslator {
     public void setup() throws Exception {
         TRANSLATOR = new OracleExecutionFactory();  
         TRANSLATOR.setUseBindVariables(false);
+        TRANSLATOR.setDatabaseVersion(Version.DEFAULT_VERSION);
         TRANSLATOR.start();
     }
 
@@ -1152,6 +1154,7 @@ public class TestOracleTranslator {
 				return prefix; //don't use random for testing
 			}
 		};
+		ef.setDatabaseVersion(Version.DEFAULT_VERSION);
 		ef.start();
 		JDBCQueryExecution e = new JDBCQueryExecution(command, connection, new FakeExecutionContextImpl(),  ef);
 		e.execute();
@@ -1168,4 +1171,71 @@ public class TestOracleTranslator {
     	assertEquals("create global temporary table foo (COL1 number(10,0), COL2 varchar2(100 char)) ON COMMIT PRESERVE ROWS", TranslationHelper.helpTestTempTable(TRANSLATOR, false));
     }
 
+    @Test
+    public void testGeometrySelectConvert() throws Exception {
+        String input = "select shape x from cola_markets"; //$NON-NLS-1$
+        String output = "SELECT SDO_UTIL.TO_GMLGEOMETRY(COLA_MARKETS.SHAPE) AS x FROM COLA_MARKETS"; //$NON-NLS-1$
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB, input, output, TRANSLATOR);
+    }
+
+    @Test
+    public void testGeometryDistance() throws Exception {
+        String input = "select ST_Distance(shape, shape) from cola_markets"; //$NON-NLS-1$
+        String output = "SELECT SDO_GEOM.DISTANCE(COLA_MARKETS.SHAPE, COLA_MARKETS.SHAPE, 0.005) FROM COLA_MARKETS"; //$NON-NLS-1$
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB, input, output, TRANSLATOR);
+    }
+
+    @Test
+    public void testGeometryDisjoint() throws Exception {
+        String input = "select ST_Disjoint(shape, shape) from cola_markets"; //$NON-NLS-1$
+        String output = "SELECT SDO_GEOM.RELATE(COLA_MARKETS.SHAPE, 'disjoint', COLA_MARKETS.SHAPE, 0.005) FROM COLA_MARKETS"; //$NON-NLS-1$
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB, input, output, TRANSLATOR);
+    }
+
+    @Test
+    public void testGeometryIntersects() throws Exception {
+        String input = "select ST_Intersects(shape, shape) from cola_markets"; //$NON-NLS-1$
+        String output = "SELECT SDO_RELATE(COLA_MARKETS.SHAPE, COLA_MARKETS.SHAPE, 'mask=anyinteract') FROM COLA_MARKETS"; //$NON-NLS-1$
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB, input, output, TRANSLATOR);
+    }
+    
+    @Test
+    public void testGeometryInsert() throws Exception {
+        String input = "insert into cola_markets(name,shape) values('foo124', ST_GeomFromText('POINT (300 100)', 8307))"; //$NON-NLS-1$
+        String output = "INSERT INTO COLA_MARKETS (NAME, SHAPE) VALUES ('foo124', SDO_GEOMETRY(TO_BLOB(?), 8307))"; //$NON-NLS-1$
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB, input, output, TRANSLATOR);
+    }
+    
+    @Test
+    public void testGeometryInsertNull() throws Exception {
+        String input = "insert into cola_markets(name,shape) values('foo124', null)"; //$NON-NLS-1$
+        String output = "INSERT INTO COLA_MARKETS (NAME, SHAPE) VALUES ('foo124', ?)"; //$NON-NLS-1$
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB, input, output, TRANSLATOR);
+    }
+    
+    @Test
+    public void testSrid() throws Exception {
+        String input = "select st_srid(shape) from cola_markets c"; //$NON-NLS-1$
+        String output = "SELECT nvl(c.SHAPE.sdo_srid, 0) FROM COLA_MARKETS c"; //$NON-NLS-1$
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB, input, output, TRANSLATOR);
+    }
+    
+    @Test
+    public void testGeometryInsertQueryExpression() throws Exception {
+        String input = "insert into cola_markets select * from cola_markets"; //$NON-NLS-1$
+        String output = "INSERT INTO COLA_MARKETS (MKT_ID, NAME, SHAPE) SELECT COLA_MARKETS.MKT_ID, COLA_MARKETS.NAME, COLA_MARKETS.SHAPE FROM COLA_MARKETS"; //$NON-NLS-1$
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB, input, output, TRANSLATOR);
+    }
+    
+    @Test public void testVarbinaryComparison() throws Exception {
+        String input = "select bin_col from binary_test where bin_col = x'ab'"; //$NON-NLS-1$
+        String output = "SELECT binary_test.BIN_COL FROM binary_test WHERE binary_test.BIN_COL = HEXTORAW('AB')"; //$NON-NLS-1$
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB, input, output, TRANSLATOR);
+    }
+    
+    @Test public void testVarbinaryInsert() throws Exception {
+        String input = "insert into binary_test (bin_col) values (x'bc')"; //$NON-NLS-1$
+        String output = "INSERT INTO binary_test (BIN_COL) VALUES (HEXTORAW('BC'))"; //$NON-NLS-1$
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB, input, output, TRANSLATOR);
+    }
 }

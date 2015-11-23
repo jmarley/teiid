@@ -21,15 +21,18 @@
  */
 package org.teiid.query.metadata;
 
-import static org.teiid.language.SQLConstants.NonReserved.AUTO_INCREMENT;
-import static org.teiid.language.SQLConstants.NonReserved.INDEX;
-import static org.teiid.language.SQLConstants.NonReserved.SERIAL;
-import static org.teiid.language.SQLConstants.NonReserved.VIEW;
+import static org.teiid.language.SQLConstants.NonReserved.*;
 import static org.teiid.language.SQLConstants.Reserved.*;
 import static org.teiid.language.SQLConstants.Tokens.*;
 import static org.teiid.query.metadata.DDLConstants.*;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.EnumSet;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
 
 import org.teiid.adminapi.Admin.SchemaObjectType;
@@ -258,7 +261,7 @@ public class DDLStringVisitor {
 		if (record.getAnnotation() != null) {
 			addOption(sb, ANNOTATION, record.getAnnotation());
 		}
-		if (record.getNameInSource() != null && !record.getNameInSource().equals(record.getName())) {
+		if (record.getNameInSource() != null) {
 			addOption(sb, NAMEINSOURCE, record.getNameInSource());
 		}
 	}
@@ -424,72 +427,74 @@ public class DDLStringVisitor {
 			addOption(options, RADIX, column.getRadix());
 		}
 		
-		if (column instanceof Column) {
-			buildColumnOptions((Column)column, options);
-		}
+		buildColumnOptions(column, options);
+		
 		if (options.length() != 0) {
 			append(SPACE).append(OPTIONS).append(SPACE).append(LPAREN).append(options).append(RPAREN);
 		}
 	}
 
-	private void buildColumnOptions(Column column, 
+	private void buildColumnOptions(BaseColumn baseColumn, 
 			StringBuilder options) {
-		if (!column.isSelectable()) {
-			addOption(options, SELECTABLE, column.isSelectable());
-		}		
-
-		// if table is already updatable, then columns are implicitly updatable.
-		if (!column.isUpdatable() && column.getParent() instanceof Table && ((Table)column.getParent()).supportsUpdate()) {
-			addOption(options, UPDATABLE, column.isUpdatable());
-		}
-		
-		if (column.isCurrency()) {
-			addOption(options, CURRENCY, column.isCurrency());
-		}
+		if (baseColumn instanceof Column) {
+			Column column = (Column)baseColumn;
+			if (!column.isSelectable()) {
+				addOption(options, SELECTABLE, column.isSelectable());
+			}		
+	
+			// if table is already updatable, then columns are implicitly updatable.
+			if (!column.isUpdatable() && column.getParent() instanceof Table && ((Table)column.getParent()).supportsUpdate()) {
+				addOption(options, UPDATABLE, column.isUpdatable());
+			}
 			
-		// only record if not default
-		if (!column.isCaseSensitive() && column.getDatatype().isCaseSensitive()) {
-			addOption(options, CASE_SENSITIVE, column.isCaseSensitive());
+			if (column.isCurrency()) {
+				addOption(options, CURRENCY, column.isCurrency());
+			}
+				
+			// only record if not default
+			if (!column.isCaseSensitive() && column.getDatatype().isCaseSensitive()) {
+				addOption(options, CASE_SENSITIVE, column.isCaseSensitive());
+			}
+			
+			if (!column.isSigned() && column.getDatatype().isSigned()) {
+				addOption(options, SIGNED, column.isSigned());
+			}		  
+			if (column.isFixedLength()) {
+				addOption(options, FIXED_LENGTH, column.isFixedLength());
+			}
+			// length and octet length should be same. so this should be never be true.
+			//TODO - this is not quite valid since we are dealing with length representing chars in UTF-16, then there should be twice the bytes
+			if (column.getCharOctetLength() != 0 && column.getLength() != column.getCharOctetLength()) {
+				addOption(options, CHAR_OCTET_LENGTH, column.getCharOctetLength());
+			}	
+			
+			// by default the search type is default data type search, so avoid it.
+			if (column.getSearchType() != null && (!column.getSearchType().equals(column.getDatatype().getSearchType()) || column.isSearchTypeSet())) {
+				addOption(options, SEARCHABLE, column.getSearchType().name());
+			}
+			
+			if (column.getMinimumValue() != null) {
+				addOption(options, MIN_VALUE, column.getMinimumValue());
+			}
+			
+			if (column.getMaximumValue() != null) {
+				addOption(options, MAX_VALUE, column.getMaximumValue());
+			}
+			
+			if (column.getNullValues() != -1) {
+				addOption(options, NULL_VALUE_COUNT, column.getNullValues());
+			}
+			
+			if (column.getDistinctValues() != -1) {
+				addOption(options, DISTINCT_VALUES, column.getDistinctValues());
+			}		
 		}
 		
-		if (!column.isSigned() && column.getDatatype().isSigned()) {
-			addOption(options, SIGNED, column.isSigned());
-		}		  
-		if (column.isFixedLength()) {
-			addOption(options, FIXED_LENGTH, column.isFixedLength());
-		}
-		// length and octet length should be same. so this should be never be true.
-		//TODO - this is not quite valid since we are dealing with length representing chars in UTF-16, then there should be twice the bytes
-		if (column.getCharOctetLength() != 0 && column.getLength() != column.getCharOctetLength()) {
-			addOption(options, CHAR_OCTET_LENGTH, column.getCharOctetLength());
-		}	
-		
-		// by default the search type is default data type search, so avoid it.
-		if (column.getSearchType() != null && (!column.getSearchType().equals(column.getDatatype().getSearchType()) || column.isSearchTypeSet())) {
-			addOption(options, SEARCHABLE, column.getSearchType().name());
+		if (baseColumn.getNativeType() != null) {
+			addOption(options, NATIVE_TYPE, baseColumn.getNativeType());
 		}
 		
-		if (column.getMinimumValue() != null) {
-			addOption(options, MIN_VALUE, column.getMinimumValue());
-		}
-		
-		if (column.getMaximumValue() != null) {
-			addOption(options, MAX_VALUE, column.getMaximumValue());
-		}
-		
-		if (column.getNativeType() != null) {
-			addOption(options, NATIVE_TYPE, column.getNativeType());
-		}
-		
-		if (column.getNullValues() != -1) {
-			addOption(options, NULL_VALUE_COUNT, column.getNullValues());
-		}
-		
-		if (column.getDistinctValues() != -1) {
-			addOption(options, DISTINCT_VALUES, column.getDistinctValues());
-		}		
-		
-		buildOptions(column, options);
+		buildOptions(baseColumn, options);
 	}
 	
 	private void appendOptions(AbstractMetadataRecord record) {
@@ -558,7 +563,7 @@ public class DDLStringVisitor {
 		else {
 			append(FOREIGN);
 		}
-		append(SPACE).append(PROCEDURE).append(SPACE).append(SQLStringVisitor.escapeSinglePart(procedure.getName()));
+		append(SPACE).append(procedure.isFunction()?FUNCTION:PROCEDURE).append(SPACE).append(SQLStringVisitor.escapeSinglePart(procedure.getName()));
 		append(LPAREN);
 		
 		boolean first = true;
@@ -574,7 +579,9 @@ public class DDLStringVisitor {
 		append(RPAREN);
 		
 		if (procedure.getResultSet() != null) {
-			append(SPACE).append(RETURNS).append(SPACE).append(TABLE).append(SPACE);
+			append(SPACE).append(RETURNS);
+			appendOptions(procedure.getResultSet());
+			append(SPACE).append(TABLE).append(SPACE);
 			addColumns(procedure.getResultSet().getColumns(), true);
 		}
 		/* The parser treats the RETURN clause as optional for a procedure if using the RESULT param
@@ -670,7 +677,9 @@ public class DDLStringVisitor {
 		}
 		append(RPAREN);
 		
-		append(SPACE).append(RETURNS).append(SPACE);
+		append(SPACE).append(RETURNS);
+		appendOptions(function.getOutputParameter());
+		append(SPACE);
 		append(function.getOutputParameter().getType());
 		
 		//options
@@ -678,6 +687,12 @@ public class DDLStringVisitor {
 		if (!options.isEmpty()) {
 			append(NEWLINE).append(OPTIONS).append(SPACE).append(LPAREN).append(options).append(RPAREN);
 		}		
+		
+		/*if (function.getDefinition() != null) {
+			append(NEWLINE).append(SQLConstants.Reserved.AS).append(NEWLINE);
+			append(function.getDefinition());
+		}*/
+		
 		append(SQLConstants.Tokens.SEMICOLON);		
 	}
 
@@ -714,7 +729,7 @@ public class DDLStringVisitor {
 		if (param.isVarArg()) {
 			append(NonReserved.VARIADIC).append(SPACE);
 		}
-		append(SQLStringVisitor.escapeSinglePart(param.getName())).append(SPACE).append(param.getType());
+		appendColumn(param, true, true);
 	}
 
     @Override

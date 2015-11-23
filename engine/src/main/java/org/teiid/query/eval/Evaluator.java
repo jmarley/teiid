@@ -41,10 +41,15 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import javax.xml.transform.stream.StreamResult;
+import javax.xml.transform.stream.StreamSource;
 
+import net.sf.saxon.Configuration;
+import net.sf.saxon.om.Item;
 import net.sf.saxon.om.NodeInfo;
 import net.sf.saxon.query.QueryResult;
 import net.sf.saxon.trans.XPathException;
+import net.sf.saxon.type.ValidationException;
+import net.sf.saxon.value.StringValue;
 
 import org.teiid.api.exception.query.ExpressionEvaluationException;
 import org.teiid.api.exception.query.FunctionExecutionException;
@@ -68,7 +73,9 @@ import org.teiid.query.function.FunctionLibrary;
 import org.teiid.query.function.JSONFunctionMethods.JSONBuilder;
 import org.teiid.query.function.source.XMLSystemFunctions;
 import org.teiid.query.function.source.XMLSystemFunctions.XmlConcat;
+import org.teiid.query.metadata.TempMetadataID;
 import org.teiid.query.processor.ProcessorDataManager;
+import org.teiid.query.processor.relational.XMLTableNode;
 import org.teiid.query.sql.LanguageObject;
 import org.teiid.query.sql.lang.*;
 import org.teiid.query.sql.proc.ExceptionExpression;
@@ -92,14 +99,21 @@ public class Evaluator {
 		XmlConcat concat; //just used to get a writer
 		Type type;
 		private javax.xml.transform.Result result;
+		boolean hasItem;
 		
-		private XMLQueryRowProcessor() throws TeiidProcessingException {
-			concat = new XmlConcat(context.getBufferManager());
-			result = new StreamResult(concat.getWriter());
+		private XMLQueryRowProcessor(boolean exists) throws TeiidProcessingException {
+			if (!exists) {
+				concat = new XmlConcat(context.getBufferManager());
+				result = new StreamResult(concat.getWriter());
+			}
 		}
 
 		@Override
 		public void processRow(NodeInfo row) {
+			if (concat == null) {
+				hasItem = true;
+				return;
+			}
 			if (type == null) {
 				type = SaxonXQueryExpression.getType(row);
 			} else {
@@ -233,6 +247,58 @@ public class Evaluator {
             return Boolean.valueOf(evaluate((ExistsCriteria)criteria, tuple));
         } else if (criteria instanceof ExpressionCriteria) {
         	return (Boolean)evaluate(((ExpressionCriteria)criteria).getExpression(), tuple);
+        } else if (criteria instanceof XMLExists) {
+        	return (Boolean) evaluateXMLQuery(tuple, ((XMLExists)criteria).getXmlQuery(), true);
+        } else if (criteria instanceof IsDistinctCriteria) {
+        	IsDistinctCriteria idc = (IsDistinctCriteria)criteria;
+        	TempMetadataID left = (TempMetadataID)idc.getLeftRowValue().getMetadataID();
+        	TempMetadataID right = (TempMetadataID)idc.getRightRowValue().getMetadataID();
+        	VariableContext vc = this.context.getVariableContext();
+        	List<TempMetadataID> cols = left.getElements();
+        	List<TempMetadataID> colsOther = right.getElements();
+        	if (cols.size() != colsOther.size()) {
+        		return !idc.isNegated();
+        	}
+        	for (int i = 0; i < cols.size(); i++) {
+        		Object l = vc.getValue(new ElementSymbol(cols.get(i).getName(), idc.getLeftRowValue()));
+        		Object r = vc.getValue(new ElementSymbol(colsOther.get(i).getName(), idc.getRightRowValue()));
+        		if (l == null) {
+        			if (r != null) {
+            			if (idc.isNegated()) {
+        					return false;
+        				} 
+    					return true;
+        			}
+        		} else if (r == null) {
+        			if (idc.isNegated()) {
+    					return false;
+    				} 
+					return true;
+        		}
+        		try {
+        			Boolean b = compare(CompareCriteria.EQ, l, r);
+            		if (b == null) {
+            			continue; //shouldn't happen
+            		}
+            		if (!b) {
+            			if (idc.isNegated()) {
+        					return false;
+        				} 
+    					return true;
+            		}
+        		} catch (Exception e) {
+        			//we'll consider this a difference
+        			//more than likely they are different types
+        			if (idc.isNegated()) {
+    					return false;
+    				} 
+					return true;
+        		}
+        	}
+        	if (idc.isNegated()) {
+				return true;
+			} 
+			return false;
 		} else {
              throw new ExpressionEvaluationException(QueryPlugin.Event.TEIID30311, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30311, criteria));
 		}
@@ -304,7 +370,7 @@ public class Evaluator {
 		}
 
 		// Compare two non-null values using specified operator
-		return compare(criteria, leftValue, rightValue);
+		return compare(criteria.getOperator(), leftValue, rightValue);
 	}
 
 	private Boolean evaluate(MatchCriteria criteria, List<?> tuple)
@@ -521,7 +587,7 @@ public class Evaluator {
             }
 
             if(value != null) {
-            	result = compare(criteria, leftValue, value);
+            	result = compare(criteria.getOperator(), leftValue, value);
 
                 switch(criteria.getPredicateQuantifier()) {
                     case SubqueryCompareCriteria.ALL:
@@ -548,7 +614,7 @@ public class Evaluator {
         return result;
     }
 
-	public static Boolean compare(AbstractCompareCriteria criteria, Object leftValue,
+	public static Boolean compare(int operator, Object leftValue,
 			Object value) throws AssertionError {
 		int compare = 0;
 		//TODO: we follow oracle style array comparison
@@ -567,7 +633,7 @@ public class Evaluator {
 		}
 		// Compare two non-null values using specified operator
 		Boolean result = null;
-		switch(criteria.getOperator()) {
+		switch(operator) {
 		    case CompareCriteria.EQ:
 		        result = Boolean.valueOf(compare == 0);
 		        break;
@@ -677,7 +743,7 @@ public class Evaluator {
 	   } else if (expression instanceof XMLSerialize){
 		   return evaluateXMLSerialize(tuple, (XMLSerialize)expression);
 	   } else if (expression instanceof XMLQuery) {
-		   return evaluateXMLQuery(tuple, (XMLQuery)expression);
+		   return evaluateXMLQuery(tuple, (XMLQuery)expression, false);
 	   } else if (expression instanceof QueryString) {
 		   return evaluateQueryString(tuple, (QueryString)expression);
 	   } else if (expression instanceof XMLParse){
@@ -696,9 +762,62 @@ public class Evaluator {
 		   return new ArrayImpl(result);
 	   } else if (expression instanceof ExceptionExpression) {
 		   return evaluate(tuple, (ExceptionExpression)expression);
+	   } else if (expression instanceof XMLCast) {
+		   return evaluate(tuple, (XMLCast)expression);
 	   } else {
 	        throw new TeiidComponentException(QueryPlugin.Event.TEIID30329, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30329, expression.getClass().getName()));
 	   }
+	}
+
+	private Object evaluate(List<?> tuple, XMLCast expression) throws ExpressionEvaluationException, BlockedException, TeiidComponentException {
+		Object val = internalEvaluate(expression.getExpression(), tuple);
+		if (val == null) {
+			return new Constant(null, expression.getType());
+		}
+		Configuration config = new Configuration();
+		XMLType value = (XMLType)val;
+		Type t = value.getType();
+		try {
+			Item i = null;
+			switch (t) {
+				case CONTENT: 
+					//content could map to an array value, but we aren't handling that case here yet - only in xmltable
+				case COMMENT:
+				case PI:
+					throw new FunctionExecutionException();
+				case TEXT:
+					i = new StringValue(value.getString());
+					break;
+				case UNKNOWN:
+				case DOCUMENT:
+				case ELEMENT:
+					StreamSource ss = value.getSource(StreamSource.class);
+					try {
+						i = config.buildDocument(ss);
+					} finally {
+						if (ss.getInputStream() != null) {
+							ss.getInputStream().close();
+						}
+						if (ss.getReader() != null) {
+							ss.getReader().close();
+						}
+					}
+					break;
+				default:
+					throw new AssertionError("Unknown xml value type " + t); //$NON-NLS-1$
+			}
+			return XMLTableNode.getValue(expression.getType(), i, config, context);
+		} catch (IOException e) {
+			throw new FunctionExecutionException(e);
+		} catch (ValidationException e) {
+			throw new FunctionExecutionException(e);
+		} catch (TransformationException e) {
+			throw new FunctionExecutionException(e);
+		} catch (XPathException e) {
+			throw new FunctionExecutionException(e);
+		} catch (SQLException e) {
+			throw new FunctionExecutionException(e);
+		}
 	}
 
 	private Object evaluate(List<?> tuple, ExceptionExpression ee)
@@ -736,6 +855,14 @@ public class Evaluator {
 				result.setCharset(Streamable.CHARSET);
 				if (!xp.isWellFormed()) {
 					Reader r = new StringReader(string);
+					type = validate(xp, r);
+				}
+			} else if (value instanceof BinaryType) {
+				BinaryType string = (BinaryType)value;
+				result = new SQLXMLImpl(string.getBytesDirect());
+				result.setCharset(Streamable.CHARSET);
+				if (!xp.isWellFormed()) {
+					Reader r = result.getCharacterStream();
 					type = validate(xp, r);
 				}
 			} else {
@@ -824,7 +951,17 @@ public class Evaluator {
 		return result.toString();
 	}
 
-	private Object evaluateXMLQuery(List<?> tuple, XMLQuery xmlQuery)
+	/**
+	 * 
+	 * @param tuple
+	 * @param xmlQuery
+	 * @param exists - check only for the existence of a non-empty result
+	 * @return Boolean if exists is true, otherwise an XMLType value
+	 * @throws BlockedException
+	 * @throws TeiidComponentException
+	 * @throws FunctionExecutionException
+	 */
+	private Object evaluateXMLQuery(List<?> tuple, XMLQuery xmlQuery, boolean exists)
 			throws BlockedException, TeiidComponentException,
 			FunctionExecutionException {
 		boolean emptyOnEmpty = xmlQuery.getEmptyOnEmpty() == null || xmlQuery.getEmptyOnEmpty();
@@ -832,10 +969,19 @@ public class Evaluator {
 		try {
 			XMLQueryRowProcessor rp = null;
 			if (xmlQuery.getXQueryExpression().isStreaming()) {
-				rp = new XMLQueryRowProcessor();
+				rp = new XMLQueryRowProcessor(exists);
 			}
 			try {
 				result = evaluateXQuery(xmlQuery.getXQueryExpression(), xmlQuery.getPassing(), tuple, rp);
+				if (result == null) {
+					return null;
+				}
+				if (exists) {
+					if (result.iter.next() == null) {
+						return false;
+					}
+					return true;
+				}
 			} catch (TeiidRuntimeException e) {
 				if (e.getCause() instanceof XPathException) {
 					throw (XPathException)e.getCause();
@@ -843,6 +989,9 @@ public class Evaluator {
 				throw e;
 			}
 			if (rp != null) {
+				if (exists) {
+					return rp.hasItem;
+				}
 				XMLType.Type type = rp.type;
 				if (type == null) {
 					if (!emptyOnEmpty) {
@@ -850,11 +999,11 @@ public class Evaluator {
 					}
 					type = Type.CONTENT;
 				}
-				XMLType val = rp.concat.close();
+				XMLType val = rp.concat.close(context);
 				val.setType(rp.type);
 				return val;
 			}
-			return xmlQuery.getXQueryExpression().createXMLType(result.iter, this.context.getBufferManager(), emptyOnEmpty);
+			return xmlQuery.getXQueryExpression().createXMLType(result.iter, this.context.getBufferManager(), emptyOnEmpty, context);
 		} catch (TeiidProcessingException e) {
 			 throw new FunctionExecutionException(QueryPlugin.Event.TEIID30333, e, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30333, e.getMessage()));
 		} catch (XPathException e) {
@@ -943,7 +1092,7 @@ public class Evaluator {
 			}
 			builder.end(false);
 			if (returnValue) {
-				ClobType result = builder.close();
+				ClobType result = builder.close(context);
 				builder = null;
 				return result;
 			}
@@ -1005,7 +1154,7 @@ public class Evaluator {
 			}
 			builder.end(true);
 			if (returnValue) {
-				ClobType result = builder.close();
+				ClobType result = builder.close(context);
 				builder = null;
 				return result;
 			}
@@ -1038,28 +1187,32 @@ public class Evaluator {
 	
 	private Result evaluateXQuery(SaxonXQueryExpression xquery, List<DerivedColumn> cols, List<?> tuple, RowProcessor processor) 
 	throws BlockedException, TeiidComponentException, TeiidProcessingException {
-		HashMap<String, Object> parameters = new HashMap<String, Object>();
-		Object contextItem = evaluateParameters(cols, tuple, parameters);
+		Map<String, Object> parameters = new HashMap<String, Object>();
+		evaluateParameters(cols, tuple, parameters);
+		Object contextItem = null;
+		if (parameters.containsKey(null)) {
+			contextItem = parameters.remove(null);
+			if (contextItem == null) {
+				return null;
+			}
+		}
 		return XQueryEvaluator.evaluateXQuery(xquery, contextItem, parameters, processor, context);
 	}
 
 	/**
 	 * Evaluate the parameters and return the context item if it exists
 	 */
-	public Object evaluateParameters(List<DerivedColumn> cols, List<?> tuple,
-			Map<String, Object> parameters)
+	public void evaluateParameters(List<DerivedColumn> cols, List<?> tuple, Map<String, Object> parameters)
 			throws ExpressionEvaluationException, BlockedException,
 			TeiidComponentException {
-		Object contextItem = null;
 		for (DerivedColumn passing : cols) {
 			Object value = evaluateParameter(tuple, passing);
 			if (passing.getAlias() == null) {
-				contextItem = value;
+				parameters.put(null, value);
 			} else {
 				parameters.put(passing.getAlias(), value);
 			}
 		}
-		return contextItem;
 	}
 
 	private Object evaluateParameter(List<?> tuple, DerivedColumn passing)
@@ -1104,11 +1257,12 @@ public class Evaluator {
 			Expression ex = symbol.getExpression();
 			if (name == null && ex instanceof ElementSymbol) {
 				name = ((ElementSymbol)ex).getShortName();
+			}
+			if (name != null) {
 				if (xmlNames) {
 					name = XMLSystemFunctions.escapeName(name, true);
 				}
-			}
-			if (!xmlNames && name == null) {
+			} else if (!xmlNames) {
 				name = "expr" + (i+1); //$NON-NLS-1$
 			}
 			nameValuePairs[i] = new Evaluator.NameValuePair<Object>(name, eval?internalEvaluate(ex, tuple):ex);
@@ -1188,6 +1342,14 @@ public class Evaluator {
 			}
 	    }
 	    
+	    if (fd.getProcedure() != null) {
+	    	try {
+				return evaluateProcedure(function, tuple, values);
+			} catch (TeiidProcessingException e) {
+				throw new ExpressionEvaluationException(e);
+			}
+	    }
+	    
 	    // Check for special lookup function
 	    if(function.getName().equalsIgnoreCase(FunctionLibrary.LOOKUP)) {
 	        if(dataMgr == null) {
@@ -1253,6 +1415,12 @@ public class Evaluator {
 			 throw new TeiidComponentException(QueryPlugin.Event.TEIID30328, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30328, expression, QueryPlugin.Util.getString("Evaluator.no_value"))); //$NON-NLS-1$
 		}
 		return context;
+	}
+
+	protected Object evaluateProcedure(Function function, List<?> tuple,
+			Object[] values) throws TeiidComponentException,
+			TeiidProcessingException {
+		throw new UnsupportedOperationException("Procedure evaluation not possible with a base Evaluator"); //$NON-NLS-1$
 	}   
 	    
 }

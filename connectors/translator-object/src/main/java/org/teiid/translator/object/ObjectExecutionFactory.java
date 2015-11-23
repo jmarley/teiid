@@ -26,10 +26,16 @@ import java.util.List;
 
 import javax.resource.cci.ConnectionFactory;
 
+import org.teiid.language.Command;
 import org.teiid.language.QueryExpression;
 import org.teiid.language.Select;
 import org.teiid.metadata.RuntimeMetadata;
-import org.teiid.translator.*;
+import org.teiid.translator.ExecutionContext;
+import org.teiid.translator.ExecutionFactory;
+import org.teiid.translator.MetadataProcessor;
+import org.teiid.translator.ResultSetExecution;
+import org.teiid.translator.TranslatorException;
+import org.teiid.translator.UpdateExecution;
 import org.teiid.translator.object.metadata.JavaBeanMetadataProcessor;
 
 
@@ -40,12 +46,12 @@ import org.teiid.translator.object.metadata.JavaBeanMetadataProcessor;
  * @author vhalbert
  * 
  */
-@Translator(name = "map-cache", description = "Searches a Map for Objects")
-public class ObjectExecutionFactory extends
+public abstract class ObjectExecutionFactory extends
 		ExecutionFactory<ConnectionFactory, ObjectConnection> {
 
 	public static final int MAX_SET_SIZE = 10000;
-
+	private SearchType searchType=null;
+	
 	public ObjectExecutionFactory() {
 		setSourceRequiredForMetadata(false);
 		setMaxInCriteriaSize(MAX_SET_SIZE);
@@ -56,6 +62,18 @@ public class ObjectExecutionFactory extends
 		setSupportsInnerJoins(false);
 		setSupportsFullOuterJoins(false);
 		setSupportsOuterJoins(false);
+		
+	}
+	
+	/**
+	 * {@inheritDoc}
+	 *
+	 * @see org.teiid.translator.ExecutionFactory#start()
+	 */
+	@Override
+	public void start() throws TranslatorException {
+		if (searchType == null) throw new TranslatorException("Programming Error: Search Type was not set");
+		super.start();
 	}
 
 	@Override
@@ -64,20 +82,12 @@ public class ObjectExecutionFactory extends
 			ObjectConnection connection) throws TranslatorException {
 		return new ObjectExecution((Select) command, metadata, this, connection, executionContext);
 	}
-
-	@Override
-	public boolean supportsInnerJoins() {
-		return false;
-	}
-
-	@Override
-	public boolean supportsOuterJoins() {
-		return false;
-	}
-
-	@Override
-	public boolean supportsFullOuterJoins() {
-		return false;
+	
+    @Override
+	public UpdateExecution createUpdateExecution(Command command,
+			ExecutionContext executionContext, RuntimeMetadata metadata,
+			ObjectConnection connection) throws TranslatorException {
+    	return new ObjectUpdateExecution(command, connection, executionContext, this);
 	}
 
 	@Override
@@ -94,14 +104,49 @@ public class ObjectExecutionFactory extends
 	public boolean supportsOnlyLiteralComparison() {
 		return true;
 	}
-	public  List<Object> search(Select command, String cacheName, ObjectConnection connection,ExecutionContext executionContext) throws TranslatorException {
-		  SearchByKey sbk = new SearchByKey();
-		  Class<?> type = connection.getType(cacheName);
-		  return sbk.search(command, type, cacheName, connection.getCacheContainer());		
+	
+	public void setSearchType(SearchType type) {
+		this.searchType = type;
 	}
-
+	
+	public SearchType getSearchType() {
+		return this.searchType;
+	}
+	
 	@Override
     public MetadataProcessor<ObjectConnection> getMetadataProcessor(){
 	    return new JavaBeanMetadataProcessor();
 	}
+	
+	public List<Object> search(ObjectVisitor visitor, ObjectConnection connection, ExecutionContext executionContext)
+			throws TranslatorException {
+		return searchType.performSearch(visitor,connection);
+	}
+	
+	/**
+	 * The searchByKey is used by update operations that need to obtain a specific object, but don't need
+	 * to create a Select command in order to find a single object.
+	 * @param columnName
+	 * @param value
+	 * @param connection
+	 * @param executionContext
+	 * @return Object
+	 * @throws TranslatorException
+	 */
+	public Object performKeySearch(String columnName, Object value, ObjectConnection connection, ExecutionContext executionContext) throws TranslatorException {
+		return searchType.performKeySearch(columnName, value, connection);
+	}
+
+	/**
+	 * {@inheritDoc}
+	 *
+	 * @see org.teiid.translator.ExecutionFactory#supportsRowLimit()
+	 */
+	@Override
+	public boolean supportsRowLimit() {
+		return true;
+	}
+
+
+
 }

@@ -31,15 +31,40 @@ import java.util.TreeSet;
 
 import javax.ws.rs.core.Response.Status;
 
-import org.odata4j.edm.*;
+import org.odata4j.edm.EdmAssociation;
+import org.odata4j.edm.EdmAssociationEnd;
+import org.odata4j.edm.EdmCollectionType;
+import org.odata4j.edm.EdmComplexType;
+import org.odata4j.edm.EdmDataServices;
+import org.odata4j.edm.EdmEntityContainer;
+import org.odata4j.edm.EdmEntitySet;
+import org.odata4j.edm.EdmEntityType;
+import org.odata4j.edm.EdmFunctionImport;
+import org.odata4j.edm.EdmFunctionParameter;
+import org.odata4j.edm.EdmMultiplicity;
+import org.odata4j.edm.EdmNavigationProperty;
+import org.odata4j.edm.EdmProperty;
+import org.odata4j.edm.EdmReferentialConstraint;
+import org.odata4j.edm.EdmSchema;
+import org.odata4j.edm.EdmSimpleType;
+import org.odata4j.edm.EdmType;
 import org.odata4j.format.xml.EdmxFormatParser;
 import org.odata4j.stax2.util.StaxUtil;
 import org.teiid.logging.LogConstants;
 import org.teiid.logging.LogManager;
 import org.teiid.metadata.BaseColumn.NullType;
-import org.teiid.metadata.*;
-import org.teiid.translator.*;
+import org.teiid.metadata.Column;
+import org.teiid.metadata.ExtensionMetadataProperty;
+import org.teiid.metadata.KeyRecord;
+import org.teiid.metadata.MetadataFactory;
+import org.teiid.metadata.Procedure;
+import org.teiid.metadata.ProcedureParameter;
+import org.teiid.metadata.Table;
+import org.teiid.translator.MetadataProcessor;
+import org.teiid.translator.TranslatorException;
+import org.teiid.translator.TranslatorProperty;
 import org.teiid.translator.TranslatorProperty.PropertyType;
+import org.teiid.translator.WSConnection;
 import org.teiid.translator.ws.BinaryWSProcedureExecution;
 
 public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
@@ -69,7 +94,7 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
 	public void setExecutionfactory(ODataExecutionFactory ef) {
         this.ef = ef;
     }
-
+	
     private EdmDataServices getEds(WSConnection conn) throws TranslatorException {
         try {
             BaseQueryExecution execution = new BaseQueryExecution(ef, null, null, conn);
@@ -83,6 +108,8 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
             EdmDataServices eds = new EdmxFormatParser().parseMetadata(StaxUtil.newXMLEventReader(new InputStreamReader(out.getBinaryStream())));
             return eds;
         } catch (SQLException e) {
+            throw new TranslatorException(e);
+        } catch (Exception e) {
             throw new TranslatorException(e);
         }
 	}
@@ -135,7 +162,9 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
 
 		// add columns
 		for (EdmProperty ep:entitySet.getType().getProperties().toList()) {
-			if (ep.getType().isSimple()) {
+			if (ep.getType().isSimple() 
+			        || (ep.getType() instanceof EdmCollectionType 
+			        && ((EdmCollectionType)ep.getType()).getItemType().isSimple())) {
 				addPropertyAsColumn(mf, table, ep, entitySet);
 			}
 			else {
@@ -145,9 +174,11 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
 				// creates verbose columns but safe.
 				EdmComplexType embedded = (EdmComplexType)ep.getType();
 				for (EdmProperty property:embedded.getProperties().toList()) {
-					if (property.getType().isSimple()) {
+					if (property.getType().isSimple()
+					        || (property.getType() instanceof EdmCollectionType 
+		                    && ((EdmCollectionType)property.getType()).getItemType().isSimple())) {
 						Column column = addPropertyAsColumn(mf, table, property, entitySet, ep.getName());
-						column.setProperty(COMPLEX_TYPE, embedded.getName()); // complex type
+						column.setProperty(COMPLEX_TYPE, embedded.getFullyQualifiedTypeName()); // complex type
 						column.setProperty(COLUMN_GROUP, ep.getName()); // name of parent column
 					}
 					else {
@@ -173,7 +204,7 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
 
 			EdmEntityType toEntity = toEnd.getType();
 
-			// no support for self-joins
+			// no support for self-joinsaddPropertyAsColumn
 			if (same(fromEntity, toEntity)) {
 				continue;
 			}
@@ -393,23 +424,25 @@ public class ODataMetadataProcessor implements MetadataProcessor<WSConnection> {
 
 		// add return type
 		EdmType returnType = function.getReturnType();
-		if (returnType.isSimple()) {
-			mf.addProcedureParameter("return", ODataTypeManager.teiidType(((EdmSimpleType)returnType).getFullyQualifiedTypeName()), ProcedureParameter.Type.ReturnValue, procedure); //$NON-NLS-1$
-		}
-		else if (returnType instanceof EdmComplexType) {
-			procedure.setProperty(ENTITY_TYPE, function.getReturnType().getFullyQualifiedTypeName());
-			addProcedureTableReturn(mf, procedure, returnType);
-		}
-		else if (returnType instanceof EdmEntityType) {
-			procedure.setProperty(ENTITY_TYPE, function.getReturnType().getFullyQualifiedTypeName());
-			addProcedureTableReturn(mf, procedure, returnType);
-		}
-		else if (returnType instanceof EdmCollectionType) {
-			procedure.setProperty(ENTITY_TYPE, ((EdmCollectionType)returnType).getItemType().getFullyQualifiedTypeName());
-			addProcedureTableReturn(mf, procedure, ((EdmCollectionType)returnType).getItemType());
-		}
-		else {
-			throw new TranslatorException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID17005, function.getName(), returnType.getFullyQualifiedTypeName()));
+		if (returnType != null) {
+    		if (returnType.isSimple()) {
+    			mf.addProcedureParameter("return", ODataTypeManager.teiidType(((EdmSimpleType)returnType).getFullyQualifiedTypeName()), ProcedureParameter.Type.ReturnValue, procedure); //$NON-NLS-1$
+    		}
+    		else if (returnType instanceof EdmComplexType) {
+    			procedure.setProperty(ENTITY_TYPE, function.getReturnType().getFullyQualifiedTypeName());
+    			addProcedureTableReturn(mf, procedure, returnType);
+    		}
+    		else if (returnType instanceof EdmEntityType) {
+    			procedure.setProperty(ENTITY_TYPE, function.getReturnType().getFullyQualifiedTypeName());
+    			addProcedureTableReturn(mf, procedure, returnType);
+    		}
+    		else if (returnType instanceof EdmCollectionType) {
+    			procedure.setProperty(ENTITY_TYPE, ((EdmCollectionType)returnType).getItemType().getFullyQualifiedTypeName());
+    			addProcedureTableReturn(mf, procedure, ((EdmCollectionType)returnType).getItemType());
+    		}
+    		else {
+    			throw new TranslatorException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID17005, function.getName(), returnType.getFullyQualifiedTypeName()));
+    		}
 		}
 	}
 

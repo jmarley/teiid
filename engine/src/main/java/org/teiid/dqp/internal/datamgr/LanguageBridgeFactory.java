@@ -42,6 +42,7 @@ import org.teiid.language.SubqueryComparison.Quantifier;
 import org.teiid.language.DerivedColumn;
 import org.teiid.language.Select;
 import org.teiid.language.WindowSpecification;
+import org.teiid.metadata.BaseColumn;
 import org.teiid.metadata.Column;
 import org.teiid.metadata.Procedure;
 import org.teiid.metadata.ProcedureParameter;
@@ -167,9 +168,12 @@ public class LanguageBridgeFactory {
 	        if (command instanceof Query) {
 	            Select result = translate((Query)command);
 	            result.setDependentValues(this.dependentSets);
+	            setProjected(result);
 	            return result;
 	        } else if (command instanceof SetQuery) {
-	            return translate((SetQuery)command);
+	            org.teiid.language.SetQuery result = translate((SetQuery)command);
+	            setProjected(result);
+	            return result;
 	        } else if (command instanceof Insert) {
 	            return translate((Insert)command);
 	        } else if (command instanceof Update) {
@@ -188,6 +192,19 @@ public class LanguageBridgeFactory {
     		this.valueIndex = 0;
     	}
     }
+
+	private void setProjected(QueryExpression qe) {
+		if (qe instanceof Select) {
+			Select select = (Select)qe;
+			for (DerivedColumn dc : select.getDerivedColumns()) {
+				dc.setProjected(true);
+			}
+		} else {
+			org.teiid.language.SetQuery sq = (org.teiid.language.SetQuery)qe;
+			setProjected(sq.getLeftQuery());
+			setProjected(sq.getRightQuery());
+		}
+	}
     
     QueryExpression translate(QueryCommand command) {
     	if (command instanceof Query) {
@@ -285,6 +302,7 @@ public class LanguageBridgeFactory {
 			} else {
 				item.setDependentValues(new TupleBufferList(withQueryCommand.getTupleBuffer()));
 			}
+			item.setRecusive(withQueryCommand.isRecursive());
 			items.add(item);
 		}
     	result.setItems(items);
@@ -496,7 +514,7 @@ public class LanguageBridgeFactory {
 				if (condition == null) {
 					condition = new In(expr, translatedExpressionsSubList, criteria.isNegated()); 
 				} else {
-					condition = new AndOr(new In(expr, translatedExpressionsSubList, criteria.isNegated()), condition, criteria.isNegated()?AndOr.Operator.AND:AndOr.Operator.OR);
+					condition = new AndOr(condition, new In(expr, translatedExpressionsSubList, criteria.isNegated()), criteria.isNegated()?AndOr.Operator.AND:AndOr.Operator.OR);
 				}
         	}
         	return condition;
@@ -931,18 +949,22 @@ public class LanguageBridgeFactory {
                 	continue;
             }
             
+            if (param.isUsingDefault() && "omit".equalsIgnoreCase(metadataFactory.getMetadata().getExtensionProperty(param.getMetadataID(), BaseColumn.DEFAULT_HANDLING, false))) { 
+            	continue;
+            }
+            
             ProcedureParameter metadataParam = metadataFactory.getParameter(param);
             //we can assume for now that all arguments will be literals, which may be multivalued
             Literal value = null;
             if (direction != Direction.OUT) {
             	if (param.isVarArg()) {
             		ArrayImpl av = (ArrayImpl) ((Constant)param.getExpression()).getValue();
-	            	//if (av != null) {
+	            	if (av != null) {
 	            		for (Object obj : av.getValues()) {
 	                        Argument arg = new Argument(direction, new Literal(obj, param.getClassType().getComponentType()), param.getClassType().getComponentType(), metadataParam);
 	                        translatedParameters.add(arg);
 	            		}
-            		//}
+            		}
             		break;
             	}
             	value = (Literal)translate(param.getExpression());

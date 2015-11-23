@@ -28,12 +28,13 @@ import java.util.Properties;
 import org.teiid.adminapi.Admin;
 import org.teiid.adminapi.AdminException;
 import org.teiid.adminapi.VDB;
-import org.teiid.adminapi.AdminFactory.AdminImpl;
 import org.teiid.adminapi.VDB.Status;
+import org.teiid.adminapi.jboss.AdminFactory.AdminImpl;
 
 @SuppressWarnings("nls")
 public class AdminUtil {
-
+    public static final int MANAGEMENT_PORT = 9990;
+    
 	static void cleanUp(Admin admin) throws AdminException {
 		//TODO: cleanup when as supports it
 		/*for (String name : admin.getDataSourceNames()) {

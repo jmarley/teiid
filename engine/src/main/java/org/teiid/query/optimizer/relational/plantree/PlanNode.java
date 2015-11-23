@@ -33,6 +33,7 @@ import org.teiid.query.metadata.QueryMetadataInterface;
 import org.teiid.query.optimizer.relational.plantree.NodeConstants.Info;
 import org.teiid.query.sql.LanguageObject;
 import org.teiid.query.sql.lang.Criteria;
+import org.teiid.query.sql.lang.OrderBy;
 import org.teiid.query.sql.lang.SubqueryContainer;
 import org.teiid.query.sql.lang.TableFunctionReference;
 import org.teiid.query.sql.symbol.ElementSymbol;
@@ -416,6 +417,12 @@ public class PlanNode {
 				toSearch = groupMap.getValues();
 				break;
 			}
+			case NodeConstants.Types.SORT: {
+				OrderBy orderBy = (OrderBy) this.getProperty(NodeConstants.Info.SORT_ORDER);
+				if (orderBy != null) {
+					toSearch = orderBy.getOrderByItems();
+				}
+			}
 		}
 		return ValueIteratorProviderCollectorVisitor.getValueIteratorProviders(toSearch);
 	}
@@ -435,6 +442,17 @@ public class PlanNode {
 			record.addAnnotation(Annotation.RELATIONAL_PLANNER, annotation + (modelID != null?" " + metadata.getName(modelID):""), resolution + " " + this.nodeToString(false), Priority.LOW); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
 			this.modified = current;
 		}
+	}
+	
+	@Override
+	public PlanNode clone() {
+		PlanNode node = new PlanNode();
+		node.type = this.type;
+		node.groups = new HashSet<GroupSymbol>(this.groups);
+		if (this.nodeProperties != null) {
+			node.nodeProperties = new LinkedHashMap<NodeConstants.Info, Object>(this.nodeProperties);
+		}
+		return node;
 	}
         
 }

@@ -53,8 +53,10 @@ import org.teiid.query.sql.lang.JoinType;
 import org.teiid.query.sql.lang.OrderBy;
 import org.teiid.query.sql.lang.OrderByItem;
 import org.teiid.query.sql.navigator.PreOrPostOrderNavigator;
+import org.teiid.query.sql.symbol.Constant;
 import org.teiid.query.sql.symbol.ElementSymbol;
 import org.teiid.query.sql.symbol.Expression;
+import org.teiid.query.sql.symbol.ExpressionSymbol;
 import org.teiid.query.sql.symbol.GroupSymbol;
 import org.teiid.query.sql.symbol.Reference;
 import org.teiid.query.sql.util.SymbolMap;
@@ -187,6 +189,14 @@ public final class RuleMergeVirtual implements
             	if (jt.isOuter() && (hasCriteria || jt != JoinType.JOIN_LEFT_OUTER || FrameUtil.findJoinSourceNode(parentJoin.getFirstChild()) == frame)) {
         			return root; //cannot remove if the no source side is an outer side
             	}
+            	if (sources.isEmpty()) {
+	            	PlanNode left = FrameUtil.findJoinSourceNode(parentJoin.getFirstChild());
+	            	boolean isLeft = left == frame;
+	            	PlanNode other = isLeft? FrameUtil.findJoinSourceNode(parentJoin.getLastChild()):left;
+	            	if (other != null && (SymbolMap)other.getProperty(NodeConstants.Info.CORRELATED_REFERENCES) != null) {
+	            		return root; //TODO: we don't have the logic yet to then replace the correlated references
+	            	}
+            	}
             }
         }
 
@@ -194,9 +204,9 @@ public final class RuleMergeVirtual implements
             return root;
         }
         
-        //we dont' have to check for null dependent with no source without criteria since there must be a row
+        //we don't have to check for null dependent with no source without criteria since there must be a row
         if (!checkProjectedSymbols(projectNode, virtualGroup, parentJoin, metadata, sources, !sources.isEmpty() || frame.getParent() != parentJoin)) {
-        	//TODO: propogate constants if just inhibited by subquery/non-deterministic expressions
+        	//TODO: propagate constants if just inhibited by subquery/non-deterministic expressions
             return root;
         }
 
@@ -316,14 +326,20 @@ public final class RuleMergeVirtual implements
         List<Expression> selectSymbols = (List<Expression>)parentProject.getProperty(NodeConstants.Info.PROJECT_COLS);
 
         // check that it only performs simple projection and that all required symbols are projected
-        LinkedHashSet<ElementSymbol> symbols = new LinkedHashSet<ElementSymbol>(); //ensuring there are no duplicates prevents problems with subqueries  
+        LinkedHashSet<Expression> symbols = new LinkedHashSet<Expression>(); //ensuring there are no duplicates prevents problems with subqueries  
         for (Expression symbol : selectSymbols) {
             Expression expr = SymbolMap.getExpression(symbol);
+            if (expr instanceof Constant) {
+            	if (!symbols.add(new ExpressionSymbol("const" + symbols.size(), expr))) { //$NON-NLS-1$
+                    return root;
+                }	
+            	continue;
+            }
             if (!(expr instanceof ElementSymbol)) {
                 return root;
             }
             requiredElements.remove(expr);
-            if (!symbols.add((ElementSymbol)expr)) {
+            if (!symbols.add(expr)) {
                 return root;
             }
         }

@@ -22,24 +22,19 @@
 
 package org.teiid.resource.adapter.infinispan.dsl.base;
 
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
-import java.util.Set;
 
 import org.infinispan.client.hotrod.RemoteCache;
-import org.infinispan.client.hotrod.RemoteCacheManager;
 import org.infinispan.client.hotrod.Search;
 import org.infinispan.protostream.SerializationContext;
+import org.infinispan.protostream.descriptors.Descriptor;
 import org.infinispan.query.dsl.QueryFactory;
 import org.teiid.logging.LogConstants;
 import org.teiid.logging.LogManager;
 import org.teiid.resource.spi.BasicConnection;
 import org.teiid.translator.TranslatorException;
+import org.teiid.translator.infinispan.dsl.ClassRegistry;
 import org.teiid.translator.infinispan.dsl.InfinispanConnection;
 import org.teiid.translator.infinispan.dsl.InfinispanPlugin;
-
-import com.google.protobuf.Descriptors.Descriptor;
 
 /** 
  * Represents a connection to an Infinispan cache container. The <code>cacheName</code> that is specified will dictate the
@@ -49,17 +44,15 @@ import com.google.protobuf.Descriptors.Descriptor;
 public class InfinispanConnectionImpl extends BasicConnection implements InfinispanConnection { 
 	
 	
-	RemoteCacheManager rcm = null;
 	SerializationContext ctx = null;
 	AbstractInfinispanManagedConnectionFactory config = null;
 
 	public InfinispanConnectionImpl(AbstractInfinispanManagedConnectionFactory config)   {
 		this.config = config;
 		
-		this.rcm = config.getCacheContainer();
 		this.ctx = config.getContext();
 
-		LogManager.logDetail(LogConstants.CTX_CONNECTOR, "Infinispan Connection has been newly created."); //$NON-NLS-1$
+		LogManager.logDetail(LogConstants.CTX_CONNECTOR, "Infinispan Connection has been newly created "); //$NON-NLS-1$
 	}
 	
 	/** 
@@ -69,6 +62,7 @@ public class InfinispanConnectionImpl extends BasicConnection implements Infinis
 	@Override
     public void close() {
 		config = null;
+		ctx = null;
 	}
 
 	/** 
@@ -83,35 +77,28 @@ public class InfinispanConnectionImpl extends BasicConnection implements Infinis
 	}	
 
 	@Override
-	public Class<?> getType(String cacheName) throws TranslatorException {		
-		LogManager.logTrace(LogConstants.CTX_CONNECTOR, "=== GetType for cache :", cacheName,  "==="); //$NON-NLS-1$ //$NON-NLS-2$
+	public Class<?> getCacheClassType() throws TranslatorException {		
+		LogManager.logTrace(LogConstants.CTX_CONNECTOR, "=== GetType for cache :", config.getCacheName(),  "==="); //$NON-NLS-1$ //$NON-NLS-2$
 
-		Class<?> type = config.getCacheType(cacheName);
+		Class<?> type = config.getCacheClassType();
 		if (type != null) {
 			return type;
 		}
-        final String msg = InfinispanPlugin.Util.getString("InfinispanConnection.typeNotFoundForCache", (cacheName != null ? cacheName : "Default") ); //$NON-NLS-1$ //$NON-NLS-2$
-        throw new TranslatorException(msg);
+		throw new TranslatorException(InfinispanPlugin.Util.gs(InfinispanPlugin.Event.TEIID25040,config.getCacheName()));
+
 	}
 	
 	@Override
-	public String getPkField(String cacheName) {
-		return this.config.getPkMap(cacheName);
+	public Class<?> getCacheKeyClassType() throws TranslatorException {
+		return config.getCacheKeyClassType();
 	}
-
-	@Override
-	public Map<String, Class<?>> getCacheNameClassTypeMapping() {
-		return this.config.getCacheNameClassTypeMapping();
-	}
+	
 
 	@SuppressWarnings({ "rawtypes", "unchecked" })
 	@Override
-	public RemoteCache getCache(String cacheName) {
+	public RemoteCache getCache() {
 
-		if (cacheName == null) {
-			return rcm.getCache();
-		}
-		return rcm.getCache(cacheName);
+		return config.getCache();
 
 	}
 
@@ -120,31 +107,37 @@ public class InfinispanConnectionImpl extends BasicConnection implements Infinis
 	 *
 	 */
 	@Override
-	public Descriptor getDescriptor(String cacheName)
+	public Descriptor getDescriptor()
 			throws TranslatorException {
 		Descriptor d = ctx.getMessageDescriptor(config.getMessageDescriptor());
 		if (d == null) {
-			throw new TranslatorException(
-					InfinispanPlugin.Util
-							.getString("InfinispanManagedConnectionFactory.noDescriptorFoundForCache", config.getMessageDescriptor(), cacheName)); //$NON-NLS-1$
+			throw new TranslatorException(InfinispanPlugin.Util.gs(InfinispanPlugin.Event.TEIID25028,  config.getMessageDescriptor(), config.getCacheName()));			
 		}
 		
 		return d;
 	}
 	
-	@SuppressWarnings({ "unused", "rawtypes" })
+	@SuppressWarnings({ "rawtypes" })
 	@Override
-	public QueryFactory getQueryFactory(String cacheName) throws TranslatorException {
-		RemoteCache rc =  getCache(cacheName);
+	public QueryFactory getQueryFactory() throws TranslatorException {
 		
-		return Search.getQueryFactory(rc);
+		return Search.getQueryFactory(getCache());
 	}
 	
-	@SuppressWarnings("rawtypes")
 	@Override
-	public List<Class> getRegisteredClasses() {
-		List<Class> c = new ArrayList<Class>();
-		c.addAll(config.getMessageMarshallerList().keySet());
-		return c;
+	public  ClassRegistry getClassRegistry() {
+		return config.getClassRegistry();
 	}
+
+	@Override
+	public String getPkField() throws TranslatorException {
+		return config.getPk();
+	}
+
+	@Override
+	public String getCacheName() throws TranslatorException {
+		return config.getCacheName();
+	}
+
+
 }

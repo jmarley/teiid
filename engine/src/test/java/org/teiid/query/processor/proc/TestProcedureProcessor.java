@@ -23,9 +23,11 @@
 package org.teiid.query.processor.proc;
 
 import static org.junit.Assert.*;
+import static org.teiid.query.processor.TestProcessor.*;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 
 import org.junit.Test;
@@ -805,6 +807,19 @@ public class TestProcedureProcessor {
             };           
         helpTestProcess(plan, expected, dataMgr, metadata);
       }
+    
+    @Test public void testDynamicUpdateInto() throws Exception {
+    	
+    	TransformationMetadata metadata = RealMetadataFactory.example1Cached();
+    	String query = "BEGIN " //$NON-NLS-1$ //$NON-NLS-2$
+            + " execute immediate 'delete from pm1.g1' as v integer into #temp; select * from #temp with return; end";
+
+        FakeDataManager dataMgr = exampleDataManager(metadata);
+        
+        ProcessorPlan plan = helpGetPlan(query, metadata);
+        
+        helpProcess(plan, dataMgr, new List[] {Arrays.asList(0)});
+    }
     
 	private void addProc(TransformationMetadata metadata, String query) {
 		addProc(metadata, "sq2", query, new String[] { "e1" }, new String[] { DataTypeManager.DefaultDataTypes.STRING }, new String[0], new String[0]);
@@ -1972,6 +1987,29 @@ public class TestProcedureProcessor {
         helpTestProcess(plan, expected, dataMgr, metadata);
     }
     
+    @Test public void testOuterTempTableExecuteImmediateTarget() throws Exception {
+        String proc = "CREATE VIRTUAL PROCEDURE " + //$NON-NLS-1$
+        		"BEGIN " + //$NON-NLS-1$
+        		" create local temporary table t1 (e1 string);\n" + //$NON-NLS-1$
+        		" loop on (select 1 as a union all select 2) as c \n" +
+        		" begin \n" +
+        		" execute immediate 'select c.a' as e1 string into t1; \n" +
+        		" end \n" +
+                " select * from t1;\n" + //$NON-NLS-1$
+        		"END"; //$NON-NLS-1$
+
+        QueryMetadataInterface metadata = createProcedureMetadata(proc);
+        String userQuery = "SELECT * FROM (EXEC pm1.sq1()) as proc"; //$NON-NLS-1$
+        FakeDataManager dataMgr = exampleDataManager2(metadata);
+        ProcessorPlan plan = getProcedurePlan(userQuery, metadata, TestOptimizer.getGenericFinder());
+
+        List[] expected = new List[] {
+                Arrays.asList( "1" ),
+                Arrays.asList( "2" ),
+        };
+        helpTestProcess(plan, expected, dataMgr, metadata);
+    }
+    
     @Test public void testUnambiguousVirtualProc() throws Exception {
         String userQuery = "EXEC MMSP6('1')"; //$NON-NLS-1$
         QueryMetadataInterface metadata = RealMetadataFactory.exampleBQTCached();
@@ -2118,6 +2156,38 @@ public class TestProcedureProcessor {
         helpTestProcess(plan, expected, dataManager, tm);
     }
     
+    @Test public void testVarArgsNull() throws Exception {
+    	String ddl = "create foreign procedure proc (x integer, VARIADIC z integer not null); create virtual procedure vproc (x integer, VARIADIC z integer) returns integer as begin \"return\" = z[2] + array_length(z); call proc(x, z); end;";
+    	TransformationMetadata tm = TestProcedureResolving.createMetadata(ddl);    	
+        String sql = "call vproc(1, cast(null as integer[]))"; //$NON-NLS-1$
+
+        ProcessorPlan plan = getProcedurePlan(sql, tm);
+
+        HardcodedDataManager dataManager = new HardcodedDataManager(tm);
+        dataManager.addData("EXEC proc(1)", new List<?>[0]);
+        // Create expected results
+        List[] expected = new List[] { Collections.singletonList(null) }; //$NON-NLS-1$
+        helpTestProcess(plan, expected, dataManager, tm);
+        
+        sql = "call vproc(x=>1, z=>null)"; //$NON-NLS-1$
+
+        plan = getProcedurePlan(sql, tm);
+        
+        helpTestProcess(plan, expected, dataManager, tm);
+    }
+    
+    @Test public void testVarArgsVirtNull() throws Exception {
+    	String ddl = "create virtual procedure vproc (x integer, VARIADIC z integer not null) returns (y integer) as begin select array_length(z); end;";
+    	TransformationMetadata tm = TestProcedureResolving.createMetadata(ddl);
+    	
+    	String sql = "call vproc(1, (select cast(null as integer[])))"; //$NON-NLS-1$
+
+        ProcessorPlan plan = getProcedurePlan(sql, tm);
+
+        HardcodedDataManager dataManager = new HardcodedDataManager();
+    	helpTestProcess(plan, new List[] {Collections.singletonList(null)}, dataManager, tm);
+    }
+    
     @Test public void testVarArgsVirtNotNull() throws Exception {
     	String ddl = "create virtual procedure vproc (x integer, VARIADIC z integer NOT NULL) returns (y integer) as begin select array_length(z); end;";
     	TransformationMetadata tm = TestProcedureResolving.createMetadata(ddl);
@@ -2206,6 +2276,32 @@ public class TestProcedureProcessor {
         getProcedurePlan(sql, tm);
     }
     
+    @Test public void testDepJoinFullProcessing() throws Exception {
+    	String sql = " BEGIN"
+    			+ "\n    create local temporary table ssid_version (sysplex varchar, lpar varchar, ssid varchar, version varchar);"
+    			+ "\n  insert into ssid_version(sysplex, lpar, ssid, version) values ('plex1', 'ca11', 'd91a', 'v5');"
+    			+ "\n    insert into ssid_version(sysplex, lpar, ssid, version) values ('plex1', 'ca11', 'd91b', 'v6');"
+    			+ "\n create local temporary table table_spaces_v5 (sysplex varchar, lpar varchar, ssid varchar, table_space_id varchar);"
+    			+ "\n    insert into table_spaces_v5 (sysplex, lpar, ssid, table_space_id) values ('plex1', 'ca11', 'd91a', 'ts1');"
+    			+ "\n create local temporary table table_spaces_v6 (sysplex varchar, lpar varchar, ssid varchar, table_space_id varchar);"
+    			+ "\n    insert into table_spaces_v6 (sysplex, lpar, ssid, table_space_id) values ('plex1', 'ca11', 'd91b', 'ts2');"
+    			+ "\n select table_space_id from ( select * from (select v.sysplex, v.lpar, v.ssid, t.table_space_id from ssid_version v join table_spaces_v5 t on t.sysplex=v.sysplex and t.lpar=v.lpar and t.ssid=v.ssid option makedep table_spaces_v5) t"
+    			+ " union all select * from (select v.sysplex, v.lpar, v.ssid, t.table_space_id from ssid_version v join table_spaces_v6 t on t.sysplex=v.sysplex and t.lpar=v.lpar and t.ssid=v.ssid option makedep table_spaces_v6) t"
+    			+ " ) t where ssid='d91a';"
+    			//+ " exception e"
+    			//+ " raise e.exception;"
+    			+ "\n   END";
+    	
+    	TransformationMetadata tm = RealMetadataFactory.example1Cached();
+        ProcessorPlan plan = getProcedurePlan(sql, tm);
+
+        HardcodedDataManager dataManager = new HardcodedDataManager(tm);
+        dataManager.addData("SELECT g1.e1 FROM g1", new List<?>[] {Arrays.asList("a")});
+        List[] expected = new List[] { Arrays.asList("ts1") }; //$NON-NLS-1$
+        helpTestProcess(plan, expected, dataManager, tm);
+    }
+   
+    
     @Test public void testDynamicCommandWithIntoExpressionInNestedBlock() throws Exception {
 		TransformationMetadata metadata = RealMetadataFactory.example1Cached();
 		String query = "BEGIN\n"
@@ -2240,6 +2336,112 @@ public class TestProcedureProcessor {
         HardcodedDataManager dataManager = new HardcodedDataManager(tm);
         
     	helpTestProcess(plan, new List[] {Arrays.asList(2)}, dataManager, tm);
+    }
+    
+    @Test public void testSubqueryArguments() {
+        String sql = "select * from (EXEC pm1.sq3b((select min(e1) from pm1.g1), (select max(e2) from pm1.g1))) as x"; //$NON-NLS-1$
+
+        ProcessorPlan plan = helpGetPlan(sql, RealMetadataFactory.example1Cached());
+        FakeDataManager fdm = new FakeDataManager();
+        fdm.setBlockOnce();
+        sampleData1(fdm);
+        helpProcess(plan, fdm, new List[] {Arrays.asList("a", 0), Arrays.asList("a", 3), Arrays.asList("a", 0), Arrays.asList("a", 3)});
+    }
+    
+    @Test public void testDynamicInsert() throws Exception {
+        String sql = "exec p1(1)"; //$NON-NLS-1$
+        TransformationMetadata tm = RealMetadataFactory.fromDDL("create virtual procedure p1(a long) returns (res long) as "
+        		+ "begin create local temporary table t (x string); execute immediate 'insert into t select ''a''';  end;", "x", "y");
+        ProcessorPlan plan = getProcedurePlan(sql, tm);
+
+        HardcodedDataManager dataManager = new HardcodedDataManager(tm);
+        List[] expected = new List[] {  }; //$NON-NLS-1$
+        helpTestProcess(plan, expected, dataManager, tm);
+    }
+    
+    @Test(expected=TeiidProcessingException.class) public void testDynamicInsert1() throws Exception {
+        String sql = "exec p1(1)"; //$NON-NLS-1$
+        TransformationMetadata tm = RealMetadataFactory.fromDDL("create virtual procedure p1(a long) returns (res long) as "
+        		+ "begin create local temporary table t (x string); execute immediate 'insert into t select ''a''' as res long;  end;", "x", "y");
+        ProcessorPlan plan = getProcedurePlan(sql, tm);
+
+        HardcodedDataManager dataManager = new HardcodedDataManager(tm);
+        List[] expected = new List[] {  }; //$NON-NLS-1$
+        helpTestProcess(plan, expected, dataManager, tm);
+    }
+    
+    @Test(expected=TeiidProcessingException.class) public void testDynamicCreate() throws Exception {
+        String sql = "exec p1(1)"; //$NON-NLS-1$
+        TransformationMetadata tm = RealMetadataFactory.fromDDL("create virtual procedure p1(a long) returns (res long) as "
+        		+ "begin execute immediate 'create local temporary table t (x string)' as res long;  end;", "x", "y");
+        ProcessorPlan plan = getProcedurePlan(sql, tm);
+
+        HardcodedDataManager dataManager = new HardcodedDataManager(tm);
+        List[] expected = new List[] {  }; //$NON-NLS-1$
+        helpTestProcess(plan, expected, dataManager, tm);
+    }
+    
+    // TEIID-3267 OPTION NOCACHE causes ConcurrentModificationException
+    @Test public void testOptionNocacheDynamic() throws Exception {
+        TransformationMetadata metadata = RealMetadataFactory.example1();
+        String proc = "CREATE VIRTUAL PROCEDURE\n" //$NON-NLS-1$
+            + "BEGIN\n" //$NON-NLS-1$
+            + "DECLARE string VARIABLES.strSql = 'select g1.e1 from vm1.g1 as g1, vm1.g2 as g2 where g1.e1=g2.e1 option nocache g1';\n" //$NON-NLS-1$
+            + "EXECUTE IMMEDIATE VARIABLES.strSql AS id string;\n" //$NON-NLS-1$
+            + "END"; //$NON-NLS-1$
+        addProc(metadata, proc);
+        String userUpdateStr = "EXEC pm1.sq2()"; //$NON-NLS-1$
+        HardcodedDataManager hdm = new HardcodedDataManager(false);
+        ProcessorPlan plan = getProcedurePlan(userUpdateStr, metadata);
+        
+        // expecting 0 row without an exception
+        List[] expected = new List[] {}; //$NON-NLS-1$
+        helpTestProcess(plan, expected, hdm, metadata);
+    }
+    
+    @Test public void testUDF() throws Exception {
+        TransformationMetadata metadata = RealMetadataFactory.fromDDL("CREATE VIRTUAL FUNCTION f1(VARIADIC e1 integer) RETURNS integer as return array_length(e1);", "x", "y");
+        
+        ProcessorPlan plan = helpGetPlan("select f1(1, 2, 1)", metadata);
+        CommandContext cc = TestProcessor.createCommandContext();
+        cc.setMetadata(metadata);
+        helpProcess(plan, cc, new HardcodedDataManager(), new List[] {Arrays.asList(3)});
+    }
+    
+    @Test public void testUDFCorrelated() throws Exception {
+        TransformationMetadata metadata = RealMetadataFactory.fromDDL("CREATE VIRTUAL FUNCTION f1(x integer) RETURNS string as return (select e1 from g1 where e2 = x/2); create foreign table g1 (e1 string, e2 integer);", "x", "y");
+        
+        ProcessorPlan plan = helpGetPlan("select * from g1, table ( select f1 (g1.e2)) t;", metadata);
+        CommandContext cc = TestProcessor.createCommandContext();
+        cc.setMetadata(metadata);
+        HardcodedDataManager hdm = new HardcodedDataManager();
+        hdm.addData("SELECT y.g1.e1, y.g1.e2 FROM y.g1", Arrays.asList("a", 1), Arrays.asList("b", 2));
+        hdm.addData("SELECT y.g1.e2, y.g1.e1 FROM y.g1", Arrays.asList(1, "a"), Arrays.asList(2, "b"));
+        hdm.setBlockOnce(true);
+        helpProcess(plan, cc, hdm, new List[] {Arrays.asList("a", 1, null), Arrays.asList("b", 2, "a")});
+    }
+    
+    @Test public void testDefaultExpression() throws Exception {
+        TransformationMetadata metadata = RealMetadataFactory.fromDDL("CREATE foreign procedure f1(x string default 'current_database()' options (\"teiid_rel:default_handling\" 'expression')) RETURNS string", "x", "y");
+        
+        ProcessorPlan plan = helpGetPlan("exec f1()", metadata);
+        CommandContext cc = TestProcessor.createCommandContext();
+        cc.setMetadata(metadata);
+        HardcodedDataManager hdm = new HardcodedDataManager(metadata);
+        hdm.addData("EXEC f1('myvdb')", Arrays.asList("a"));
+        hdm.setBlockOnce(true);
+        helpProcess(plan, cc, hdm, new List[] {Arrays.asList("a")});
+    }
+    
+    @Test public void testOmitDefault() throws Exception {
+        TransformationMetadata metadata = RealMetadataFactory.fromDDL("CREATE foreign procedure f1(x string options (\"teiid_rel:default_handling\" 'omit')) RETURNS string", "x", "y");
+        
+        ProcessorPlan plan = helpGetPlan("exec f1()", metadata);
+        CommandContext cc = TestProcessor.createCommandContext();
+        cc.setMetadata(metadata);
+        HardcodedDataManager hdm = new HardcodedDataManager(metadata);
+        hdm.addData("EXEC f1()", Arrays.asList("a"));
+        helpProcess(plan, cc, hdm, new List[] {Arrays.asList("a")});
     }
     
     private static final boolean DEBUG = false;

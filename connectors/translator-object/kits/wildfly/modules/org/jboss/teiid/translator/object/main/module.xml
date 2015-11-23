@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module xmlns="urn:jboss:module:1.0" name="org.jboss.teiid.translator.object">
+    <properties>
+        <property name="jboss.api" value="private"/>
+    </properties>
+    
+    <resources>
+        <resource-root path="translator-object-${project.version}.jar" />
+        <!-- Insert resources here -->
+    </resources>
+
+    <dependencies>
+        <module name="javax.api"/>
+        <module name="javax.resource.api"/>
+        <module name="org.jboss.teiid.common-core"  export="true" />
+        <module name="org.jboss.teiid.api"  export="true" />
+        <!--  need teiid-engine for the scriptengine -->
+        <module name="org.jboss.teiid" export="true" />
+        <!-->module name="org.jboss.teiid" /-->
+        <module name="org.jboss.modules"  export="true" />
+ 
+        
+        <!--
+        This "your.pojo.module" would be used when the map-cache translator is used.
+        The "your.pojo.module" name needs to be replaced with the module name that has
+        the java class(s) that's being stored in the JDG cache 
+         
+        -->
+    
+        <module name="your.pojo.module"  optional="true"  export="true" />
+ 
+    </dependencies>
+</module>
+        

@@ -33,12 +33,14 @@ import java.util.concurrent.TimeUnit;
 
 import javax.naming.InitialContext;
 import javax.naming.NamingException;
+import javax.security.auth.Subject;
 
 import org.teiid.client.DQP;
 import org.teiid.client.security.ILogon;
 import org.teiid.client.security.LogonException;
 import org.teiid.client.security.LogonResult;
 import org.teiid.client.util.ExceptionUtil;
+import org.teiid.client.util.ResultsFuture;
 import org.teiid.core.TeiidComponentException;
 import org.teiid.core.TeiidRuntimeException;
 import org.teiid.core.util.PropertiesUtils;
@@ -87,7 +89,12 @@ public class LocalServerConnection implements ServerConnection {
 				vdbName = vdbName.substring(0, firstIndex);
 			}
 			if (vdbVersion != null) {
-				int waitForLoad = PropertiesUtils.getIntProperty(connectionProperties, EmbeddedProfile.WAIT_FOR_LOAD, -1);
+				int waitForLoad = PropertiesUtils.getIntProperty(connectionProperties, TeiidURL.CONNECTION.LOGIN_TIMEOUT, -1);
+				if (waitForLoad == -1) {
+					waitForLoad = PropertiesUtils.getIntProperty(connectionProperties, EmbeddedProfile.WAIT_FOR_LOAD, -1);
+				} else {
+					waitForLoad *= 1000; //seconds to milliseconds
+				}
 				if (waitForLoad != 0) {
 					this.csr.waitForFinished(vdbName, Integer.valueOf(vdbVersion), waitForLoad);
 				}
@@ -124,6 +131,13 @@ public class LocalServerConnection implements ServerConnection {
 	}
 	
 	public synchronized void authenticate() throws ConnectionException, CommunicationException {
+		Object previousSecurityContext = workContext.getSecurityHelper().associateSecurityContext(workContext.getSession().getSecurityContext());
+		try {
+			logoff(); 
+		} finally {
+			workContext.getSecurityHelper().associateSecurityContext(previousSecurityContext);
+		}
+		workContext.setSecurityContext(previousSecurityContext);
         try {
         	this.result = this.getService(ILogon.class).logon(this.connectionProperties);
         } catch (LogonException e) {
@@ -151,18 +165,12 @@ public class LocalServerConnection implements ServerConnection {
 					// check to make sure the current security context same as logged one
 					if (passthrough && !logon 
 							&& !arg1.equals(cancelMethod) // -- it's ok to use another thread to cancel
-							&& workContext.getSession().getSessionId() != null
+							&& !workContext.getSession().isClosed()
 							//if configured without a security domain the context will be null
 							&& workContext.getSession().getSecurityDomain() != null
-							&& !csr.getSecurityHelper().sameSubject(workContext.getSession().getSecurityDomain(), workContext.getSession().getSecurityContext(), workContext.getSubject())) {
+							&& !sameSubject(workContext)) {
 						//TODO: this is an implicit changeUser - we may want to make this explicit, but that would require pools to explicitly use changeUser
 						LogManager.logInfo(LogConstants.CTX_SECURITY, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40115, workContext.getSession().getSessionId()));
-						Object previousSecurityContext = workContext.getSecurityHelper().associateSecurityContext(workContext.getSession().getSecurityContext());
-						try {
-							logoff(); 
-						} finally {
-							workContext.getSecurityHelper().associateSecurityContext(previousSecurityContext);
-						}
 						authenticate();
 					}
 					
@@ -180,10 +188,29 @@ public class LocalServerConnection implements ServerConnection {
 			}
 		}));
 	}
-
+	
+	public static boolean sameSubject(DQPWorkContext workContext) {
+		Object currentContext = workContext.getSecurityHelper().getSecurityContext();
+		
+		if (currentContext != null) {
+			Subject currentUser = workContext.getSecurityHelper().getSubjectInContext(workContext.getSecurityDomain());
+			if (workContext.getSubject() != null && currentUser != null && workContext.getSubject().equals(currentUser)) {
+				return true;
+			}
+		}
+		
+		return false;
+	}
+	
 	@Override
 	public boolean isOpen(long msToTest) {
 		if (shutdown) {
+			return false;
+		}
+		try {
+			ResultsFuture<?> result = this.getService(ILogon.class).ping();
+			result.get(msToTest, TimeUnit.MILLISECONDS);
+		} catch (Exception e) {
 			return false;
 		}
 		return true;

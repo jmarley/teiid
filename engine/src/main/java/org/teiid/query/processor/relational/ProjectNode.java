@@ -47,6 +47,8 @@ import org.teiid.query.sql.util.SymbolMap;
 
 public class ProjectNode extends SubqueryAwareRelationalNode {
 
+	private static final List<?>[] EMPTY_TUPLE = new List[]{Arrays.asList(new Object[] {})};
+
 	private List<? extends Expression> selectSymbols;
 
     // Derived element lookup map
@@ -123,10 +125,12 @@ public class ProjectNode extends SubqueryAwareRelationalNode {
             }
 
             Integer index = elementMap.get(symbol);
-            if(index == null || index.intValue() != i) {
-                // input / output element order is not the same
+            if(index == null) {
                 needsProject = true;
             } else {
+            	if (index.intValue() != i) {
+            		needsProject = true;
+            	}
             	projectionIndexes[i] = index;
             }
         }
@@ -140,7 +144,7 @@ public class ProjectNode extends SubqueryAwareRelationalNode {
             //in the case of select with no from, should return only
             //one batch with one row
             if(this.getChildren()[0] == null){
-            	currentBatch = new TupleBatch(1, new List[]{Arrays.asList(new Object[] {})});
+            	currentBatch = new TupleBatch(1, EMPTY_TUPLE);
             	currentBatch.setTerminationFlag(true);
             }else{
             	currentBatch = this.getChildren()[0].nextBatch();

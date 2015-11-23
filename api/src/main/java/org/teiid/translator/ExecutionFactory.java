@@ -34,7 +34,14 @@ import org.teiid.connector.DataPlugin;
 import org.teiid.core.TeiidException;
 import org.teiid.core.util.PropertiesUtils;
 import org.teiid.core.util.ReflectionHelper;
-import org.teiid.language.*;
+import org.teiid.language.Argument;
+import org.teiid.language.BatchedUpdates;
+import org.teiid.language.Call;
+import org.teiid.language.Command;
+import org.teiid.language.LanguageFactory;
+import org.teiid.language.QueryExpression;
+import org.teiid.language.Select;
+import org.teiid.language.SetQuery;
 import org.teiid.logging.LogConstants;
 import org.teiid.logging.LogManager;
 import org.teiid.metadata.FunctionMethod;
@@ -112,6 +119,7 @@ public class ExecutionFactory<F, C> {
 	private boolean supportsNativeQueries;
 	private LinkedList<FunctionMethod> pushdownFunctionMethods = new LinkedList<FunctionMethod>();
 	private String nativeProcedureName = "native"; //$NON-NLS-1$
+	private String collationLocale;
 	
 	/**
 	 * Initialize the connector with supplied configuration
@@ -237,7 +245,7 @@ public class ExecutionFactory<F, C> {
 	
 	/**
 	 * If true, the {@link #initCapabilities(Object)} method will be consulted prior
-	 * to deteremining the capabilites
+	 * to determining the capabilities
 	 * @return
 	 */
 	public boolean isSourceRequiredForCapabilities() {
@@ -326,7 +334,7 @@ public class ExecutionFactory<F, C> {
 	}	
 	
 	/**
-	 * Get Metadata Processor for the translator to read the metadata
+	 * Get a MetadataProcessor for the translator to read the metadata.  Typically this will return a new instance.
 	 * @return
 	 */
 	public MetadataProcessor<C> getMetadataProcessor() {
@@ -454,6 +462,13 @@ public class ExecutionFactory<F, C> {
     public boolean supportsCompareCriteriaOrdered() {
     	return false;
     }
+    
+    /** 
+     * Support indicates connector accepts criteria of form (element &lt;|&gt; constant)
+     */
+    public boolean supportsCompareCriteriaOrderedExclusive() {
+    	return supportsCompareCriteriaOrdered();
+    }
 
     /** 
      * Support indicates connector accepts criteria of form (element LIKE constant) 
@@ -549,6 +564,18 @@ public class ExecutionFactory<F, C> {
     
     public void setSupportsOrderBy(boolean supportsOrderBy) {
 		this.supportsOrderBy = supportsOrderBy;
+	}
+    
+    /** 
+     * Indicates the collation used for sorting
+     */
+    @TranslatorProperty(display="Collation Locale", description="The collation locale used by default for sorting.", advanced=true)
+    public String getCollationLocale() {
+		return collationLocale;
+	}
+    
+    public void setCollationLocale(String collation) {
+		this.collationLocale = collation;
 	}
     
     /**
@@ -934,6 +961,30 @@ public class ExecutionFactory<F, C> {
     }
     
     /**
+     * @return true if a recursive WITH clause item is supported
+     * @since 8.9
+     */
+    public boolean supportsRecursiveCommonTableExpressions() {
+    	return false;
+    }
+    
+    /**
+     * @return true if the WITH clause can appear in subqueries
+     * @since 8.12
+     */
+    public boolean supportsSubqueryCommonTableExpressions() {
+    	return supportsCommonTableExpressions();
+    }
+    
+    /**
+     * @return true if a correlated subquery can support a limit clause
+     * @since 8.12
+     */
+    public boolean supportsCorrelatedSubqueryLimit() {
+    	return supportsCorrelatedSubqueries();
+    }
+    
+    /**
      * @return true if Advanced OLAP operations are supported
      *  including the aggregate function filter clause.
      * @since 7.5
@@ -1208,5 +1259,46 @@ public class ExecutionFactory<F, C> {
 	
 	public void setThreadBound(boolean threadBound) {
 		this.threadBound = threadBound;
+	}
+	
+	/**
+	 * True if the only a single value is returned for the update count.
+	 * This overrides the default expectation of a update count array
+	 * for bulk/batch commands.  It is expected that every command
+	 * is successful.
+	 * @return
+	 */
+	public boolean returnsSingleUpdateCount() {
+		return false;
+	}
+	
+	/**
+	 * Return true if the source has columns marked with the teiid_rel:partial that
+	 * can return more rows than specified by a filter if the column is also projected.
+	 * This most closely matches the semantics of ldap queries with multi-valued 
+	 * attributes marked as partial.
+	 * <br>When true, the following supports cannot also be true:
+	 * <ul>
+	 *   <li>supportsOuterJoins()
+	 *   <li>supportsFullOuterJoins()
+	 *   <li>supportsInlineViews()
+	 *   <li>supportsIntersect()
+	 *   <li>supportsExcept()
+	 *   <li>supportsSelectExpression()
+	 *   <li>supportsUnions()
+	 *   <li>supportsSelectDistinct()
+	 *   <li>supportsGroupBy()
+	 * </ul>
+	 * @return
+	 */
+	public boolean supportsPartialFiltering() {
+		return false;
+	}
+	
+	/**
+	 * If dependent join predicates should use literals that are marked as bind eligible.
+	 */
+	public boolean useBindingsForDependentJoin() {
+		return true;
 	}
 }

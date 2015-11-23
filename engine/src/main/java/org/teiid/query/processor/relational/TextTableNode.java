@@ -35,6 +35,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.teiid.api.exception.query.ExpressionEvaluationException;
+import org.teiid.client.plan.PlanNode;
 import org.teiid.common.buffer.BlockedException;
 import org.teiid.common.buffer.BufferManager;
 import org.teiid.common.buffer.TupleBatch;
@@ -47,6 +48,7 @@ import org.teiid.core.types.DataTypeManager;
 import org.teiid.core.types.TransformationException;
 import org.teiid.dqp.internal.process.RequestWorkItem;
 import org.teiid.query.QueryPlugin;
+import org.teiid.query.analysis.AnalysisRecord;
 import org.teiid.query.processor.ProcessorDataManager;
 import org.teiid.query.sql.LanguageObject;
 import org.teiid.query.sql.lang.TextTable;
@@ -87,6 +89,11 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 	private TeiidProcessingException asynchException;
 
 	private int limit = -1;
+
+	private boolean noTrim;
+	
+	private char newLine = '\n';
+	private boolean crNewLine = true;
 	
 	public TextTableNode(int nodeID) {
 		super(nodeID);
@@ -132,6 +139,13 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 	        }
 			lineWidth = table.getColumns().size() * DataTypeManager.MAX_STRING_LENGTH;
 		}
+		if (table.isUsingRowDelimiter()) {
+			Character c = table.getRowDelimiter();
+			if (c != null) {
+				this.newLine = c;
+				this.crNewLine = false;
+			}
+		}
         Map<Expression, Integer> elementMap = createLookupMap(table.getProjectedSymbols());
         this.projectionIndexes = getProjectionIndexes(elementMap, getElements());
 	}
@@ -169,6 +183,7 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 	
 	public void setTable(TextTable table) {
 		this.table = table;
+		this.noTrim = table.isNoTrim();
 	}
 
 	@Override
@@ -348,7 +363,7 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 		StringBuilder sb = new StringBuilder(exact ? maxLength : (maxLength >> 4));
 		while (true) {
 			char c = readChar();
-			if (c == '\n') {
+			if (c == newLine) {
 				if (sb.length() == 0) {
 					if (eof) {
 						return null;
@@ -370,7 +385,7 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 		    		sb.deleteCharAt(sb.length() - 1);
 		    		//we're not forcing them to fully specify the line, so just drop the rest
 		    		//TODO: there should be a max read length
-		    		while (readChar() != '\n') {
+		    		while (readChar() != newLine) {
 		    			
 		    		}
 		    		return sb;
@@ -386,23 +401,27 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 		try {
 			int c = reader.read();
 		    if (cr) {
-				if (c == '\n') {
+				if (c == newLine) {
 				    c = reader.read();
 				}
 				cr = false;
 		    }
 		    switch (c) {
 		    case '\r':
-				cr = true;
-				textLine++;
-				return '\n';
+		    	if (crNewLine) {
+					cr = true;
+					textLine++;
+					return newLine;
+		    	}
+		    	break;
 		    case -1:
 		    	eof = true;
 		    	textLine++;
-				return '\n';
-		    case '\n':		
+				return newLine;
+		    }
+		    if (c == newLine) {
 				textLine++;
-				return '\n';
+				return newLine;
 		    }
 		    return (char)c;
 		} catch (IOException e) {
@@ -452,7 +471,7 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 				}
 				processHeader(parseLine(line));
 			} else {
-				while (readChar() != '\n') {
+				while (readChar() != newLine) {
 	    			
 	    		}
 			}
@@ -472,7 +491,11 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 			if (col.isOrdinal()) {
 				continue;
 			}
-			Integer index = nameIndexes.get(col.getName().toUpperCase());
+			String name = col.getName().toUpperCase();
+			if (col.getHeader() != null) {
+				name = col.getHeader().toUpperCase();
+			}
+			Integer index = nameIndexes.get(name);
 			if (index == null) {
 				 throw new TeiidProcessingException(QueryPlugin.Event.TEIID30181, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30181, col.getName(), systemId));
 			}
@@ -500,14 +523,14 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 					if (cr) {
 						builder.append('\r'); 
 					}
-					builder.append('\n'); 
+					builder.append(newLine); 
 					escaped = false;
 					line = readLine(lineWidth, false);
 					continue;
 				} 
 				if (!qualified) {
 					//close the last entry
-					addValue(result, wasQualified, builder.toString());
+					addValue(result, wasQualified || noTrim, builder.toString());
 					return result;
 				} 
 				line = readLine(lineWidth, false);
@@ -522,7 +545,7 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 						builder.append(chr);
 						escaped = false;
 					} else {
-						addValue(result, wasQualified, builder.toString());
+						addValue(result, wasQualified || noTrim, builder.toString());
 						wasQualified = false;
 						builder = new StringBuilder();  //next entry
 					} 
@@ -596,6 +619,13 @@ public class TextTableNode extends SubqueryAwareRelationalNode {
 	@Override
 	protected Collection<? extends LanguageObject> getObjects() {
 		return Arrays.asList(this.table.getFile());
+	}
+	
+	@Override
+	public PlanNode getDescriptionProperties() {
+		PlanNode props = super.getDescriptionProperties();
+        AnalysisRecord.addLanaguageObjects(props, AnalysisRecord.PROP_TABLE_FUNCTION, Arrays.asList(this.table));
+        return props;
 	}
 	
 }

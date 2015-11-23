@@ -106,7 +106,7 @@ CREATE FOREIGN TABLE Orders (
 CREATE FOREIGN TABLE OrderDetails (
   odID integer NOT NULL,
   ProductID integer NOT NULL,
-  UnitPrice float default '0',
+  UnitPrice double default '0',
   Quantity integer default '1',
   Discount float default '0',
   FOREIGN KEY (odID) REFERENCES Orders (OrderID),
@@ -188,3 +188,57 @@ CREATE FOREIGN TABLE Notes (
     Comment varchar(50),
     FOREIGN KEY (CustomerId) REFERENCES Customer (customer_id)
  ) OPTIONS(UPDATABLE 'TRUE', "teiid_mongo:MERGE" 'Customer');
+ 
+ CREATE FOREIGN TABLE ArrayTest (
+    id integer,
+    column1 object[] OPTIONS (SEARCHABLE 'Unsearchable')
+ ) OPTIONS(UPDATABLE 'TRUE');
+ 
+CREATE FOREIGN TABLE N1 (
+    e1 integer NOT NULL,
+    e2 integer NOT NULL,
+    e3 integer,
+    PRIMARY KEY (e1)
+) OPTIONS(UPDATABLE 'TRUE');
+
+CREATE FOREIGN TABLE N2 (
+    e1 integer NOT NULL PRIMARY KEY,
+    e2 integer NOT NULL,
+    e3 integer,
+    FOREIGN KEY (e1) REFERENCES N1 (e1)
+) OPTIONS(UPDATABLE 'TRUE', "teiid_mongo:MERGE" 'N1');
+
+CREATE FOREIGN TABLE N3 (
+    e1 integer NOT NULL PRIMARY KEY,
+    e2 integer NOT NULL,
+    e3 integer,
+    FOREIGN KEY (e1) REFERENCES N2 (e1)
+) OPTIONS(UPDATABLE 'TRUE', "teiid_mongo:MERGE" 'N2');
+
+CREATE FOREIGN TABLE N4 (
+    e1 integer NOT NULL PRIMARY KEY,
+    e2 integer NOT NULL,
+    e3 integer,
+    FOREIGN KEY (e2) REFERENCES N2 (e1)
+) OPTIONS(UPDATABLE 'TRUE', "teiid_mongo:MERGE" 'N2');
+
+CREATE FOREIGN TABLE N5 (
+    e1 integer NOT NULL PRIMARY KEY,
+    e2 integer NOT NULL,
+    e3 integer,
+    FOREIGN KEY (e2) REFERENCES N1 (e1)
+) OPTIONS(UPDATABLE 'TRUE', "teiid_mongo:MERGE" 'N1');
+
+CREATE FOREIGN TABLE N6 (
+    e1 integer NOT NULL PRIMARY KEY,
+    e2 integer NOT NULL,
+    e3 integer,
+    FOREIGN KEY (e1) REFERENCES N5 (e1)
+) OPTIONS(UPDATABLE 'TRUE', "teiid_mongo:MERGE" 'N5');
+
+CREATE FOREIGN TABLE N7 (
+    e1 integer NOT NULL PRIMARY KEY,
+    e2 integer NOT NULL,
+    e3 integer,
+    FOREIGN KEY (e2) REFERENCES N5 (e1)
+) OPTIONS(UPDATABLE 'TRUE', "teiid_mongo:MERGE" 'N5');

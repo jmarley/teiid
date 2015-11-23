@@ -82,12 +82,23 @@ public class RuleImplementJoinStrategy implements OptimizerRule {
 	        	Set<GroupSymbol> groups = GroupsUsedByElementsVisitor.getGroups(references.getValues());
 	        	PlanNode joinNode = NodeEditor.findParent(sourceNode, NodeConstants.Types.JOIN, NodeConstants.Types.SOURCE);
 	        	while (joinNode != null) {
-	        		joinNode.setProperty(NodeConstants.Info.JOIN_STRATEGY, JoinStrategyType.NESTED_TABLE);
-	        		if (joinNode.getProperty(NodeConstants.Info.DEPENDENT_VALUE_SOURCE) != null) {
-	        			//sanity check
-	        			throw new AssertionError("Cannot use a depenedent join when the join involves a correlated nested table.");  //$NON-NLS-1$
-	        		}
 	        		if (joinNode.getGroups().containsAll(groups)) {
+	        			joinNode.setProperty(NodeConstants.Info.JOIN_STRATEGY, JoinStrategyType.NESTED_TABLE);
+	        			SymbolMap map = null;
+	        			Info info = Info.RIGHT_NESTED_REFERENCES;
+	        			if (!FrameUtil.findJoinSourceNode(joinNode.getFirstChild()).getGroups().containsAll(groups)) {
+	        				info = Info.LEFT_NESTED_REFERENCES;
+	        			}
+        				map = (SymbolMap) joinNode.getProperty(info);
+        				if (map == null) {
+        					map = new SymbolMap();
+        				}
+        				joinNode.setProperty(info, map);
+	        			map.asUpdatableMap().putAll(references.asMap());
+		        		if (joinNode.getProperty(NodeConstants.Info.DEPENDENT_VALUE_SOURCE) != null) {
+		        			//sanity check
+		        			throw new AssertionError("Cannot use a depenedent join when the join involves a correlated nested table.");  //$NON-NLS-1$
+		        		}
 	        			break;
 	        		}
 	        		joinNode = NodeEditor.findParent(joinNode, NodeConstants.Types.JOIN, NodeConstants.Types.SOURCE);
@@ -144,7 +155,8 @@ public class RuleImplementJoinStrategy implements OptimizerRule {
             	for (int i = 0; i < keyExpressions.size(); i++) {
             		Expression ses = keyExpressions.get(i);
             		if (!(ses instanceof ElementSymbol)) {
-						continue;
+            			toCriteria.add(i);
+            			continue;
 					}
             		Integer existing = indexMap.put(((ElementSymbol)ses).getMetadataID(), i);
             		if (existing != null) {
@@ -254,7 +266,7 @@ public class RuleImplementJoinStrategy implements OptimizerRule {
         	if (distinct || NewCalculateCostUtil.usesKey(sourceNode, expressions, metadata)) {
                 joinNode.setProperty(joinNode.getFirstChild() == childNode ? NodeConstants.Info.IS_LEFT_DISTINCT : NodeConstants.Info.IS_RIGHT_DISTINCT, true);
         	}
-	        if (attemptPush && RuleRaiseAccess.canRaiseOverSort(sourceNode, metadata, capFinder, sortNode, null, false)) {
+	        if (attemptPush && RuleRaiseAccess.canRaiseOverSort(sourceNode, metadata, capFinder, sortNode, null, false, true)) {
 	            sourceNode.getFirstChild().addAsParent(sortNode);
 	            
 	            if (needsCorrection) {

@@ -33,7 +33,6 @@ import org.teiid.translator.Translator;
 import org.teiid.translator.TranslatorException;
 import org.teiid.translator.TypeFacility;
 import org.teiid.translator.jdbc.AliasModifier;
-import org.teiid.translator.jdbc.ConvertModifier;
 import org.teiid.translator.jdbc.FunctionModifier;
 import org.teiid.translator.jdbc.ModFunctionModifier;
 
@@ -50,7 +49,6 @@ public class HiveExecutionFactory extends BaseHiveExecutionFactory {
     public void start() throws TranslatorException {
         super.start();
 
-        ConvertModifier convert = new ConvertModifier();
         convert.addTypeMapping("tinyint", FunctionModifier.BYTE); //$NON-NLS-1$
         convert.addTypeMapping("smallint", FunctionModifier.SHORT); //$NON-NLS-1$
         convert.addTypeMapping("int", FunctionModifier.INTEGER); //$NON-NLS-1$
@@ -60,7 +58,7 @@ public class HiveExecutionFactory extends BaseHiveExecutionFactory {
         convert.addTypeMapping("float", FunctionModifier.FLOAT); //$NON-NLS-1$
         convert.addTypeMapping("string", FunctionModifier.STRING); //$NON-NLS-1$
         convert.addTypeMapping("timestamp", FunctionModifier.TIMESTAMP); //$NON-NLS-1$
-        convert.addTypeMapping("binary", FunctionModifier.BLOB); //$NON-NLS-1$
+        convert.addTypeMapping("binary", FunctionModifier.BLOB, FunctionModifier.VARBINARY); //$NON-NLS-1$
         convert.addTypeMapping("decimal", FunctionModifier.BIGDECIMAL); //$NON-NLS-1$
         convert.addTypeMapping("date", FunctionModifier.DATE); //$NON-NLS-1$        
         // unsupported types
@@ -193,5 +191,16 @@ public class HiveExecutionFactory extends BaseHiveExecutionFactory {
     public boolean supportsGroupByRollup() {
         //https://cwiki.apache.org/confluence/display/Hive/Enhanced+Aggregation,+Cube,+Grouping+and+Rollup
         return true;
-    }    
+    }   
+    
+    @Override
+    public org.teiid.translator.ExecutionFactory.SupportedJoinCriteria getSupportedJoinCriteria() {
+    	return SupportedJoinCriteria.EQUI;
+    }
+    
+    @Override
+    public boolean useParensForJoins() {
+    	return true;
+    }
+    
 }

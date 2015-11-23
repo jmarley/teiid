@@ -1,80 +1,61 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
-	<parent>
-    	<groupId>org.jboss.integration-platform</groupId>
-    	<artifactId>jboss-integration-platform-parent</artifactId>
-    	<version>6.0.0.CR8</version>
-    </parent>    
+    <parent>
+      <groupId>org.jboss</groupId>
+      <artifactId>jboss-parent</artifactId>
+      <version>16</version>
+    </parent>  
+    
     <modelVersion>4.0.0</modelVersion>
 	<groupId>org.jboss.teiid</groupId>
 	<artifactId>teiid-parent</artifactId>
 	<packaging>pom</packaging>
 	<name>Teiid</name>
-        <version>8.8.0.Beta2-SNAPSHOT</version>
+
+    <version>8.13.0.Alpha1-SNAPSHOT</version>
 	<description>Federated SQL and XML query engine.</description>
 	<properties>
 	    <site.url>http://www.jboss.org/teiid</site.url>
+	    <illegaltransitivereportonly>true</illegaltransitivereportonly>
+	    <!-- Overrides to allow the release process to commit: https://jira.codehaus.org/browse/MRELEASE-812 -->
+	    <version.release.plugin>2.5</version.release.plugin>
 	    
-	    <!-- commenting out to use jboss bom versions -->
-        <version.org.jboss.resteasy>2.3.6.Final</version.org.jboss.resteasy>
-        <version.org.hibernate>4.1.6.Final</version.org.hibernate>
-        <version.org.hibernate.search>4.2.0.Final</version.org.hibernate.search>
-        <version.javax.ws.rs>1.1</version.javax.ws.rs> 
-        <version.org.infinispan>5.2.7.Final</version.org.infinispan>
-        <version.org.apache.xmlbeans>2.3.0</version.org.apache.xmlbeans>
-        <version.org.apache.lucene>3.6.2</version.org.apache.lucene> 
-        <version.asm>3.3.1</version.asm> 
-        <version.org.apache.cxf>2.6.8</version.org.apache.cxf> 
-        <version.org.apache.cxf-jaxrs>2.6.8</version.org.apache.cxf-jaxrs>
-        <!-- version.org.jboss.logging.jboss-logging>${version.org.jboss.logging}</version.org.jboss.logging.jboss-logging-->
-        <version.com.sun.xml.bind.jaxb>2.2.5.jboss-1</version.com.sun.xml.bind.jaxb>
-        <version.org.apache.ant>1.7.0</version.org.apache.ant>
-        <!-- version.org.jboss.marshalling.jboss-marshalling-river>${version.org.jboss.marshalling}</version.org.jboss.marshalling.jboss-marshalling-river-->
-        <version.org.jboss.arquillian>1.0.0.Final</version.org.jboss.arquillian>
-        <!-- version.javax.enterprise>${version.javax.enterprise.cdi}</version.javax.enterprise-->
-        <version.org.apache.httpcomponents>4.2.1</version.org.apache.httpcomponents>
-        <!-- version.org.hibernate.javax.persistence.hibernate-jpa-2.0-api>${version.org.hibernate.javax.persistence}</version.org.hibernate.javax.persistence.hibernate-jpa-2.0-api-->
-	    <version.io.netty>3.6.2.Final</version.io.netty> 
-        <version.commons-logging>1.1.3</version.commons-logging>
-        <version.junit>4.11</version.junit>
-        <version.org.mockito>1.9.5</version.org.mockito>
-
-		<!-- NOTE changing to use bom version of 1.1.3 will cause a build issue in teiid-engine -->
-        <version.jaxen>1.1.4</version.jaxen> <!--  1.1.3  -->
-        
-        <!-- jboss bom overrides -->
-        <!-- version.org.jboss.integration-platform>6.0.0.CR8</version.org.jboss.integration-platform-->
-        <version.org.jboss.jboss-common-core>2.2.17.GA</version.org.jboss.jboss-common-core>
-        <version.org.jboss.as>7.2.0.Alpha1-redhat-4</version.org.jboss.as>
-        <version.wsdl4j>1.6.2</version.wsdl4j>
-        <version.org.jboss.jboss-dmr>1.1.6.Final</version.org.jboss.jboss-dmr>
-        <version.org.jboss.msc.jboss-msc>1.0.4.GA</version.org.jboss.msc.jboss-msc>
-        <version.org.jboss.jboss-vfs>3.1.0.Final</version.org.jboss.jboss-vfs>
-        <version.org.picketbox>4.0.15.Final</version.org.picketbox>        
-       
-        <version.xom>1.2.5</version.xom>
-        <version.com.google.guava>14.0.1</version.com.google.guava>
+	    <!-- WildFly AS based dependencies -->
+	    <version.org.wildfly>9.0.1.Final</version.org.wildfly>
+	    <version.org.wildfly.core>1.0.1.Final</version.org.wildfly.core>
+	    <version.org.wildfly.arquillian>1.0.0.Final</version.org.wildfly.arquillian>
+	    <version.org.jboss.narayana>5.0.6.Final</version.org.jboss.narayana>
+        <version.sun.jaxb>2.2.11</version.sun.jaxb>	    
+	    <!-- <version.jaxen>1.1.6</version.jaxen> -->
+	    <version.commons-codec>1.9</version.commons-codec>
+        <!-- <version.xom>1.2.10</version.xom> -->
+        <version.com.google.guava>18.0</version.com.google.guava>
         <version.dom4j>1.6.1</version.dom4j>
-                
-        <!-- integration stack bom propererties -->
-        <version.org.mongodb.mongo-java-driver>2.11.1</version.org.mongodb.mongo-java-driver>
+         
+        <version.org.hibernate.search>5.2.0.Final</version.org.hibernate.search>
+        <version.org.infinispan.6>7.2.3.Final</version.org.infinispan.6>  
+        <version.org.apache.lucene.infinispan>7.2.3.Final</version.org.apache.lucene.infinispan>
+        <version.com.squareup.protoparser>3.1.5</version.com.squareup.protoparser>
+        <version.org.infinispan.protostream>3.0.4.Final</version.org.infinispan.protostream>        
+        <!-- JDG module slot to use  -->
+        <jdg.slot>jdg-6.5</jdg.slot>  
         
+
         <!-- Teiid specific properties -->
-        <version.org.picketbox.jbosssx-client>3.0.0.CR2</version.org.picketbox.jbosssx-client>
-        <version.net.sourceforge.saxon>9.2.1.5</version.net.sourceforge.saxon>
-        <version.json-simple>1.1</version.json-simple>
-        <version.connector-api>1.5</version.connector-api>
+        <version.org.apache.commons>3.3.2</version.org.apache.commons>
+        <version.org.codehaus.btm>2.1.3</version.org.codehaus.btm>
+        <version.org.antlr>4.5</version.org.antlr>
+        <version.org.mongodb.mongo-java-driver>2.13.1</version.org.mongodb.mongo-java-driver>
+        <version.teiid.console>2.5.1</version.teiid.console>
+        <version.net.sourceforge.saxon>9.5.1-6</version.net.sourceforge.saxon>
         <version.jta>1.1</version.jta>
-        <arquillian-container-version>7.2.0.Final</arquillian-container-version>
-        <jbossas-test-version>jboss-eap-6.1</jbossas-test-version>
-        <version.org.odata4j>0.8.0-SNAPSHOT-redhat</version.org.odata4j>
-        <version.core4j>0.5</version.core4j>        
-        <jbossas-module-root>modules/system/layers/base</jbossas-module-root>
-        <version.com.force.api>26.0.0</version.com.force.api>
+        <version.org.jboss.oreva>1.0.0</version.org.jboss.oreva>
+        <wildfly-module-root>modules/system/layers/dv</wildfly-module-root>
+        <version.com.force.api>22.0.0</version.com.force.api>
+        <version.com.force.api.34>34.0.0</version.com.force.api.34>
         <version.nux>1.6</version.nux>
         <version.gdata-spreadsheet>3.0</version.gdata-spreadsheet>
         <version.gdata-core>1.0</version.gdata-core>
-        <version.org.infinispan.6>6.0.0.Final</version.org.infinispan.6>
         <version.olap4j>1.1.0</version.olap4j>
         <version.accumulo>1.5.0</version.accumulo>
         <version.hadoop-core>0.20.2</version.hadoop-core>
@@ -83,19 +64,43 @@
         <version.accumulo>1.5.0</version.accumulo>
         <version.solr>4.6.0</version.solr>
         <version.noggit>0.5</version.noggit>
-        <version.org.apache.poi>3.10-FINAL</version.org.apache.poi>
-        <version.aws-java-sdk>1.5.7</version.aws-java-sdk>
-        <version.cassandra-driver-core>2.0.1</version.cassandra-driver-core>
-        <version.org.jboss.resteasy.tjws>2.3.6.Final</version.org.jboss.resteasy.tjws>        
+        <version.aws-java-sdk>1.10.11</version.aws-java-sdk>
+        <version.cassandra-driver-core>2.1.3</version.cassandra-driver-core>
+        <version.org.jboss.resteasy.tjws>3.0.11.Final</version.org.jboss.resteasy.tjws>        
         <version.postgresql>9.1-901.jdbc4</version.postgresql>
         <derby.version>10.2.1.6</derby.version>
-		<mysql.connector.version>5.1.5</mysql.connector.version>
-        <version.org.codehaus.groovy>1.7.2</version.org.codehaus.groovy>
-        <version.com.h2database>1.3.152</version.com.h2database>
+	    <mysql.connector.version>5.1.5</mysql.connector.version>
+        <version.org.codehaus.groovy>2.4.3</version.org.codehaus.groovy>
+        <version.com.h2database>1.3.173</version.com.h2database>
         <version.com.codahale.metrics.metrics-core>3.0.2</version.com.codahale.metrics.metrics-core>
-        <version.org.jboss.spec.jboss-javaee-6.0>1.0.0.Final</version.org.jboss.spec.jboss-javaee-6.0>
-        <version.com.google.protobuf>2.5.0</version.com.google.protobuf>
-        <version.org.infinispan.protostream>1.0.0.Final</version.org.infinispan.protostream>  <!--  1.0.0.CR1-redhat-1 is what works in EAP  -->
+        <version.de.flapdoodle.embed.mongo>1.46.0</version.de.flapdoodle.embed.mongo>
+        <version.org.eclipse.persistence>2.5.0</version.org.eclipse.persistence>
+        <version.org.apache.olingo>4.0.0</version.org.apache.olingo>
+        <version.org.eclipse.jetty>9.2.7.v20150116</version.org.eclipse.jetty>
+        <version.com.fasterxml.jackson.core>2.4.2</version.com.fasterxml.jackson.core>
+	    <version.com.fasterxml.jackson.swagger>2.4.5</version.com.fasterxml.jackson.swagger>
+	    <version.com.fasterxml.aalto-xml>0.9.10</version.com.fasterxml.aalto-xml>
+        <version.org.reflections>0.9.9</version.org.reflections>
+        <version.com.google.code.findbugs>2.0.1</version.com.google.code.findbugs>
+        <!-- <version.javax.ws.rs>2.0-m10</version.javax.ws.rs> -->
+        <version.com.facebook.presto>0.89</version.com.facebook.presto>
+        <version.net.oauth.core>20100527</version.net.oauth.core>
+        <version.jts>1.13</version.jts>
+        <version.jts2geojson>0.4.0</version.jts2geojson>
+        <version.proj4j>0.1.0</version.proj4j>
+	    <version.swagger-jaxrs>1.5.2</version.swagger-jaxrs>
+        <version.org.apache.phoenix.phoenix-core>4.2.1</version.org.apache.phoenix.phoenix-core>
+        <version.net.sf.retrotranslator>1.2.9</version.net.sf.retrotranslator>
+        <version.org.apache.cxf>3.0.5</version.org.apache.cxf>
+        <version.org.codehaus.woodstox>4.2.0</version.org.codehaus.woodstox>
+        <version.ant-contrib>1.0b3</version.ant-contrib>
+        <version.org.dbunit>2.2</version.org.dbunit>
+        <version.org.apache.poi>3.10.1</version.org.apache.poi>
+        <version.org.apache.xmlbeans>2.6.0</version.org.apache.xmlbeans>
+        <version.org.springframework>3.0.7.RELEASE</version.org.springframework>
+        <version.commons-logging>1.1</version.commons-logging>
+        <version.commons-configuration>1.6</version.commons-configuration>
+        <version.org.apache.ant>1.8.2</version.org.apache.ant>	    	    
 	</properties>
 	<scm>
         <connection>scm:git:git://github.com/teiid/teiid.git</connection>
@@ -153,6 +158,16 @@
 			</roles>
 			<timezone>-6</timezone>
 		</developer>
+		<developer>
+			<name>Kylin Soong</name>
+			<id>kylinsoong</id>
+			<email>ksoong@redhat.com</email>
+			<organization>Red Hat</organization>
+			<roles>
+				<role>Developer</role>
+			</roles>
+			<timezone>+8</timezone>
+		</developer>
 	</developers>
 	<profiles>
     <profile>
@@ -160,9 +175,6 @@
           This profile is activated manually, as in "mvn ... -P release ..."
 		  -->
       <id>release</id>
-      <properties>
-        <maven.javadoc.skip>true</maven.javadoc.skip>
-      </properties>
       <modules>
         <module>build</module>        
       </modules>
@@ -206,6 +218,7 @@
 		            <configuration>
 		              <maxmemory>512m</maxmemory>
 		              <excludePackageNames>retroruntime.*,*.internal,com.*,net.*,org.teiid.cache,org.teiid.common.*,org.teiid.core,org.teiid.deployers,org.teiid.dqp.*,org.teiid.jboss,org.teiid.netty.*,org.teiid.odbc,org.teiid.query,org.teiid.rhq.*,org.teiid.runtime,org.teiid.security,org.teiid.services,org.teiid.templates,org.teiid.test.*,org.teiid.transport,org.teiid.vdb.*</excludePackageNames>
+		              <failOnError>false</failOnError>
 		            </configuration>
 		            <executions>
 		              <execution>
@@ -244,6 +257,29 @@
 					<showWarnings>false</showWarnings>
 				</configuration>
 			</plugin>
+                        <plugin>
+                            <groupId>org.apache.maven.plugins</groupId>
+                            <artifactId>maven-checkstyle-plugin</artifactId>
+                            <version>2.13</version>
+                            <executions>
+                                <execution>
+                                    <id>verify-style</id>
+                                    <phase>process-classes</phase>
+                                    <goals>
+                                        <goal>check</goal>
+                                    </goals>
+                                </execution>
+                            </executions>
+                            <configuration>
+                                <logViolationsToConsole>true</logViolationsToConsole>
+                                <failOnViolation>false</failOnViolation>
+                                <checkstyleRules>
+                                    <module name="Checker">
+                                        <module name="FileTabCharacter" />
+                                    </module>
+                                </checkstyleRules>
+                            </configuration>
+                        </plugin>
 			<plugin>
 				<artifactId>maven-surefire-plugin</artifactId>
 				<version>${version.surefire.plugin}</version>
@@ -334,37 +370,27 @@
 	</dependencies>
 	<dependencyManagement>
 		<dependencies>
+            <!-- Import the core parent to get all the managed dependencies from core -->
             <dependency>
-                <groupId>junit</groupId>
-                <artifactId>junit</artifactId>
-                <version>${version.junit}</version>
+                <groupId>org.wildfly.core</groupId>
+                <artifactId>wildfly-core-parent</artifactId>
+                <type>pom</type>
+                <version>${version.org.wildfly.core}</version>
+                <scope>import</scope>
             </dependency>
             <dependency>
-                <groupId>org.mockito</groupId>
-                <artifactId>mockito-all</artifactId>
-                <version>${version.org.mockito}</version>
-            </dependency>        
-           <!--  dependency>
-            <groupId>org.jboss.integration-platform</groupId>
-            <artifactId>jboss-integration-platform-bom</artifactId>
-            <version>${version.org.jboss.integration-platform}</version>
-            <scope>import</scope>
-            <type>pom</type>
-          </dependency-->
-          <dependency>
-             <groupId>org.jboss.as</groupId>
-             <artifactId>jboss-as-parent</artifactId>
-             <version>${version.org.jboss.as}</version>
-             <type>pom</type>
-             <scope>import</scope>
-          </dependency>   
-          
-       <!--
-      Declare all dependency versions and default scopes here, but not optional.
-      Each module should declare it's direct dependency and possibily overwrite scope/optional.
-      -->
+			    <groupId>org.wildfly</groupId>
+			    <artifactId>wildfly-parent</artifactId>
+                <type>pom</type>
+                <version>${version.org.wildfly}</version>
+                <scope>import</scope>			    
+            </dependency>
+	      <!--
+	      Declare all dependency versions and default scopes here, but not optional.
+	      Each module should declare it's direct dependency and possibily overwrite scope/optional.
+	      -->
       
-      <!-- Internal dependencies -->
+          <!-- Internal dependencies -->
 			<dependency>
 			  <groupId>org.jboss.teiid.connectors</groupId>
 			  <artifactId>translator-odata</artifactId>
@@ -410,7 +436,12 @@
             	<groupId>org.jboss.teiid.connectors</groupId>
             	<artifactId>translator-salesforce</artifactId>
             	<version>${project.version}</version>
-        	</dependency>  
+        	</dependency>
+	        <dependency>
+	            <groupId>org.jboss.teiid.connectors</groupId>
+	            <artifactId>connector-salesforce</artifactId>
+	            <version>${project.version}</version>
+	        </dependency>        	
       		<dependency>
             	<groupId>org.jboss.teiid.connectors</groupId>
            		<artifactId>translator-jdbc</artifactId>
@@ -421,11 +452,6 @@
             	<artifactId>google-api</artifactId>
   	        	<version>${project.version}</version>
         	</dependency>
-            <dependency>
-      	    	<groupId>org.jboss.teiid.connectors</groupId>
-            	<artifactId>salesforce-api</artifactId>
-  	        	<version>${project.version}</version>
-        	</dependency> 
             <dependency>
       	    	<groupId>org.jboss.teiid.connectors</groupId>
             	<artifactId>mongodb-api</artifactId>
@@ -476,7 +502,23 @@
                 <groupId>org.jboss.teiid</groupId>
                 <artifactId>teiid-admin</artifactId>
                 <version>${project.version}</version>
-            </dependency>  
+            </dependency>
+            <dependency>
+                <groupId>org.jboss.teiid</groupId>
+                <artifactId>teiid-admin</artifactId>
+                <version>${project.version}</version>
+                <type>test-jar</type>
+            </dependency>                                                      
+            <dependency>
+                <groupId>org.jboss.teiid</groupId>
+                <artifactId>teiid-jboss-admin</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+	        <dependency>
+	            <groupId>org.jboss.teiid</groupId>
+	            <artifactId>teiid-jboss-security</artifactId>
+	            <version>${project.version}</version>
+	        </dependency>
 			<dependency>
 				<groupId>org.jboss.teiid</groupId>
 				<artifactId>teiid-adminshell</artifactId>
@@ -555,44 +597,57 @@
 				<artifactId>translator-infinispan-dsl</artifactId>
 				<type>test-jar</type>
                 <version>${project.version}</version>
-			</dependency>        
+			</dependency>
+             <dependency>
+                <groupId>org.jboss.teiid.connectors</groupId>
+                <artifactId>translator-infinispan-cache</artifactId>
+                <version>${project.version}</version>
+            </dependency>   			
+	         <dependency>
+	            <groupId>org.jboss.teiid.connectors</groupId>
+	            <artifactId>translator-infinispan-cache</artifactId>
+                <type>test-jar</type>
+                <version>${project.version}</version>
+	        </dependency>			
+	       <dependency>
+               <groupId>org.jboss.teiid.connectors</groupId>
+               <artifactId>translator-file</artifactId>
+               <version>${project.version}</version>
+           </dependency>
+           <dependency>
+               <groupId>org.jboss.teiid.connectors</groupId>
+               <artifactId>connector-file</artifactId>
+               <version>${project.version}</version>
+               <classifier>lib</classifier>
+           </dependency>
+
       <!-- External dependencies -->
-      
 			<dependency>
 				<groupId>net.sf.retrotranslator</groupId>
 				<artifactId>retrotranslator-runtime</artifactId>
-				<version>1.2.9</version>
+				<version>${version.net.sf.retrotranslator}</version>
 			</dependency>
-
 			<dependency>
 				<groupId>net.sf.retrotranslator</groupId>
 				<artifactId>retrotranslator-transformer</artifactId>
-				<version>1.2.9</version>
+				<version>${version.net.sf.retrotranslator}</version>
 			</dependency> 
-            <dependency>
-                <groupId>org.jboss.as</groupId>
-                <artifactId>jboss-as-subsystem-test-framework</artifactId>
-                <version>${version.org.jboss.as}</version>
-            </dependency>
-            <dependency>
-                <groupId>org.jboss.as</groupId>
-                <artifactId>jboss-as-subsystem-test</artifactId>
-                <version>${version.org.jboss.as}</version>
-            </dependency>              
-			<dependency>
+<!-- 			<dependency>
 				<groupId>javax.resource</groupId>
 				<artifactId>connector-api</artifactId>
 				<version>${version.connector-api}</version>
-			</dependency>
+			</dependency> -->
+			<!--
 			<dependency>
 				<groupId>javax.transaction</groupId>
                 <artifactId>jta</artifactId>
 				<version>${version.jta}</version>
 			</dependency>
+			-->
 			<dependency>
 				<groupId>commons-logging</groupId>
 				<artifactId>commons-logging</artifactId>
-				<version>1.1</version>
+				<version>${version.commons-logging}</version>
 				<exclusions>
 					<exclusion>
 						<groupId>logkit</groupId>
@@ -608,6 +663,7 @@
                     </exclusion>       
 				</exclusions>
 			</dependency>
+			<!-- 
             <dependency>
                 <groupId>org.jboss</groupId>
                 <artifactId>jboss-common-core</artifactId>
@@ -618,21 +674,11 @@
                         <artifactId>jboss-logging-spi</artifactId>
                     </exclusion>
                 </exclusions>
-            </dependency>                        
+            </dependency>       
             <dependency>
                 <groupId>org.jboss</groupId>
                 <artifactId>jboss-vfs</artifactId>
-                <version>${version.org.jboss.jboss-vfs}</version>
-                <exclusions>
-                    <exclusion>
-                        <groupId>org.jboss.logging</groupId>
-                        <artifactId>jboss-logging</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>org.jboss.logging</groupId>
-                        <artifactId>jboss-logging-spi</artifactId>
-                    </exclusion>
-                </exclusions>                
+                <version>${version.org.jboss.jboss-vfs}</version>                
             </dependency>              
             <dependency>
                 <groupId>org.jboss.as</groupId>
@@ -690,63 +736,67 @@
                         <artifactId>jboss-logging-processor</artifactId>
                     </exclusion>
                 </exclusions>
-            </dependency>  
-	    	<dependency>
-	      		<groupId>org.infinispan</groupId>
-	      		<artifactId>infinispan-server-hotrod</artifactId>
-	      		<version>${version.org.infinispan}</version>
-	    	</dependency>		    	                      
+            </dependency>
+               
             <dependency>
                 <groupId>org.jboss.logging</groupId>
                 <artifactId>jboss-logging-spi</artifactId>
                 <version>2.2.0.CR1</version>
-            </dependency>         
+            </dependency>      
             <dependency>
-              <groupId>org.jboss.arquillian.junit</groupId>
-              <artifactId>arquillian-junit-container</artifactId>
-              <version>${version.org.jboss.arquillian}</version>
-              <exclusions>
-                <exclusion>
-                  <groupId>commons-logging</groupId>
-                  <artifactId>commons-logging</artifactId>
-                </exclusion>
-              </exclusions>
-            </dependency>   
-            <dependency>
-                <groupId>org.jboss.as</groupId>
-                <artifactId>jboss-as-arquillian-container-managed</artifactId>
-                <version>${arquillian-container-version}</version>
+                <groupId>org.wildfly.arquillian</groupId>
+                <artifactId>wildfly-arquillian-parent</artifactId>
+                <version>${version.org.wildfly.arquillian}</version>
+                <type>pom</type>
+                <scope>import</scope>
             </dependency>
             <dependency>
-                <groupId>org.jboss.as</groupId>
-                <artifactId>jboss-as-arquillian-common</artifactId>
-                <version>${arquillian-container-version}</version>
+                <groupId>org.wildfly.arquillian</groupId>
+                <artifactId>wildfly-arquillian-common</artifactId>
+                <version>${version.org.wildfly.arquillian}</version>
             </dependency>
+
             <dependency>
-                <groupId>org.jboss.as</groupId>
-                <artifactId>jboss-as-arquillian-protocol-jmx</artifactId>
-                <version>${arquillian-container-version}</version>
+                <groupId>org.jboss.shrinkwrap.descriptors</groupId>
+                <artifactId>shrinkwrap-descriptors-impl-base</artifactId>
+                <version>${version.org.jboss.shrinkwrap.descriptors}</version>
             </dependency>
+
             <dependency>
-                <groupId>org.jboss.as</groupId>
-                <artifactId>jboss-as-arquillian-testenricher-msc</artifactId>
-                <version>${arquillian-container-version}</version>
-            </dependency>              
+                <groupId>org.wildfly.arquillian</groupId>
+                <artifactId>wildfly-arquillian-container-managed</artifactId>
+                <version>${version.org.wildfly.arquillian}</version>
+            </dependency>
+
+            <dependency>
+                <groupId>org.wildfly.arquillian</groupId>
+                <artifactId>wildfly-arquillian-protocol-jmx</artifactId>
+                <version>${version.org.wildfly.arquillian}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.wildfly.security</groupId>
+                        <artifactId>wildfly-security-manager</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+            -->                      
 			<dependency>
-				<groupId>net.sourceforge.saxon</groupId>
-				<artifactId>saxonhe</artifactId>
+				<groupId>net.sf.saxon</groupId>
+				<artifactId>Saxon-HE</artifactId>
 				<version>${version.net.sourceforge.saxon}</version>
 			</dependency>
+			<!-- 
 			<dependency>
 				<groupId>io.netty</groupId>
 				<artifactId>netty</artifactId>
 				<version>${version.io.netty}</version>
 			</dependency>
-			<!--dependency>
-				<groupId>org.apache.ant</groupId>
-				<artifactId>ant</artifactId>
-				<version>${version.ant.plugin}</version>
-			</dependency-->
+			 -->
+	        <dependency>
+	            <groupId>org.apache.ant</groupId>
+	            <artifactId>ant</artifactId>
+	            <version>${version.org.apache.ant}</version>
+	        </dependency>			 
 			<dependency>
 				<groupId>org.apache.ant</groupId>
 				<artifactId>ant-launcher</artifactId>
@@ -755,7 +805,7 @@
             <dependency>
                 <groupId>ant-contrib</groupId>
                 <artifactId>ant-contrib</artifactId>
-                <version>1.0b3</version>
+                <version>${version.ant-contrib}</version>
                 <exclusions>
                     <exclusion>
                         <groupId>ant</groupId>
@@ -766,7 +816,7 @@
 			<dependency>
 				<groupId>ant-contrib</groupId>
 				<artifactId>cpptasks</artifactId>
-				<version>1.0b3</version>
+				<version>${version.ant-contrib}</version>
 				<exclusions>
 								<exclusion>
 									<groupId>ant</groupId>
@@ -777,7 +827,7 @@
             <dependency>
                 <groupId>com.sun.xml.bind</groupId>
                 <artifactId>jaxb-xjc</artifactId>
-                <version>${version.com.sun.xml.bind.jaxb}</version>
+                <version>${version.sun.jaxb}</version>
                 <exclusions>
                     <exclusion>
                         <groupId>javax.xml.bind</groupId>
@@ -785,6 +835,7 @@
                     </exclusion>
                 </exclusions>
             </dependency>
+            <!-- 
             <dependency>
                 <groupId>org.infinispan</groupId>
                 <artifactId>infinispan-core</artifactId>
@@ -835,7 +886,7 @@
                       <artifactId>jboss-transaction-api_1.1_spec</artifactId>
                     </exclusion>  
                 </exclusions>
-            </dependency>     
+            </dependency> 
             <dependency>
                 <groupId>asm</groupId>
                 <artifactId>asm</artifactId>
@@ -846,17 +897,18 @@
                 <artifactId>wsdl4j</artifactId>
                 <version>${version.wsdl4j}</version>
             </dependency>
+            
             <dependency>
                 <groupId>javax.ws.rs</groupId>
                 <artifactId>jsr311-api</artifactId>
                 <version>${version.javax.ws.rs}</version>
             </dependency>
+            -->
             <dependency>
-              <groupId>org.odata4j</groupId>
-              <artifactId>odata4j-core</artifactId>
-              <version>${version.org.odata4j}</version>
-              <classifier>redhat</classifier>
-              <exclusions>                
+              <groupId>org.jboss.oreva</groupId>
+              <artifactId>odata-core</artifactId>
+              <version>${version.org.jboss.oreva}</version>
+              <exclusions>
                     <exclusion>
                         <groupId>org.eclipse.persistence</groupId>
                         <artifactId>javax.persistence</artifactId>
@@ -868,7 +920,7 @@
                     <exclusion>
                         <groupId>org.eclipse.persistence</groupId>
                         <artifactId>eclipselink</artifactId>
-                    </exclusion>  
+                    </exclusion>
                     <!-- 
                     <exclusion>
                         <groupId>joda-time</groupId>
@@ -878,35 +930,37 @@
                 </exclusions>              
             </dependency>
             <dependency>
-                <artifactId>core4j</artifactId>
-                <groupId>org.core4j</groupId>
-                <version>${version.core4j}</version>
+                <artifactId>common</artifactId>
+                <groupId>org.jboss.oreva</groupId>
+                <version>${version.org.jboss.oreva}</version>
             </dependency>
-            <dependency>
-                <groupId>org.jboss.resteasy</groupId>
-                <artifactId>resteasy-jaxrs</artifactId>
-                <version>${version.org.jboss.resteasy}</version>
-            </dependency>            
             <dependency>
                 <groupId>org.jboss.resteasy</groupId>
                 <artifactId>tjws</artifactId>
                 <version>${version.org.jboss.resteasy.tjws}</version>
-            </dependency>                 
+            </dependency>            
+            <!-- 
             <dependency>
-                <groupId>com.force.api</groupId>
-                <artifactId>force-wsc</artifactId>
-                <version>${version.com.force.api}</version>
-              <exclusions>                
-                    <exclusion>
-                        <groupId>com.google.code.gson</groupId>
-                        <artifactId>gson</artifactId>
-                    </exclusion>
-                    <exclusion>
-                        <groupId>rhino</groupId>
-                        <artifactId>js</artifactId>
-                    </exclusion>
-               </exclusions>                
+                <groupId>org.jboss.resteasy</groupId>
+                <artifactId>resteasy-jaxrs</artifactId>
+                <version>${version.org.jboss.resteasy}</version>
+            </dependency>  
+			<dependency>
+			    <groupId>org.apache.httpcomponents</groupId>
+			    <artifactId>httpclient</artifactId>
+			    <version>${version.org.apache.httpcomponents.httpclient}</version>
+			</dependency>
+            <dependency>
+                <groupId>org.jboss.resteasy</groupId>
+                <artifactId>tjws</artifactId>
+                <version>${version.org.jboss.resteasy.tjws}</version>
             </dependency>
+            <dependency>
+                <groupId>org.jboss.resteasy</groupId>
+                <artifactId>resteasy-multipart-provider</artifactId>
+                <version>${version.org.jboss.resteasy}</version>
+            </dependency>
+                                       
             <dependency>
                 <groupId>org.hibernate</groupId>
                 <artifactId>hibernate-core</artifactId>
@@ -931,11 +985,13 @@
                     </exclusion>               
                 </exclusions>                     
             </dependency>
+            -->   
             <dependency>
                 <groupId>nux</groupId>
                 <artifactId>nux</artifactId>
                 <version>${version.nux}</version>
-            </dependency>  
+            </dependency>
+            <!--   
 			<dependency>
 				<groupId>org.jdom</groupId>
 				<artifactId>jdom</artifactId>
@@ -945,7 +1001,8 @@
                   <groupId>jaxen</groupId>
                   <artifactId>jaxen</artifactId>
                   <version>${version.jaxen}</version>                    
-            </dependency>                                            
+            </dependency>
+                                                        
             <dependency>
                 <groupId>org.apache.lucene</groupId>
                 <artifactId>lucene-core</artifactId>
@@ -956,10 +1013,11 @@
 		        <artifactId>guava</artifactId>
 		        <version>${version.com.google.guava}</version>
             </dependency>
+            --> 
             <dependency>
                 <groupId>org.codehaus.woodstox</groupId>
                 <artifactId>woodstox-core-asl</artifactId>
-                <version>4.2.0</version>
+                <version>${version.org.codehaus.woodstox}</version>
                 <exclusions>
                    <exclusion>
                        <artifactId>stax-api</artifactId>
@@ -967,6 +1025,25 @@
                    </exclusion>
                 </exclusions>
             </dependency>
+            <!-- 
+            <dependency>
+              <groupId>org.apache.cxf</groupId>
+              <artifactId>cxf-api</artifactId>
+              <version>${version.org.apache.cxf}</version>
+            </dependency>    
+            <dependency>
+              <groupId>org.apache.cxf</groupId>
+              <artifactId>cxf-rt-core</artifactId>
+              <version>${version.org.apache.cxf}</version>
+                <exclusions>
+                   <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-api</artifactId>
+                    </exclusion> 
+                </exclusions>              
+            </dependency>
+             -->  
+             <!-- 
             <dependency>
                 <groupId>org.apache.cxf</groupId>
                 <artifactId>cxf-rt-frontend-jaxws</artifactId>
@@ -976,33 +1053,173 @@
                         <groupId>javax.mail</groupId>
                         <artifactId>mail</artifactId>
                     </exclusion>
+                   <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-api</artifactId>
+                    </exclusion>                 
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-core</artifactId>
+                    </exclusion>  
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-bindings-soap</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-bindings-xml</artifactId>
+                    </exclusion> 
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-frontend-simple</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-ws-addr</artifactId>
+                    </exclusion>                    
                 </exclusions>
             </dependency>
             <dependency>
                 <groupId>org.apache.cxf</groupId>
                 <artifactId>cxf-rt-transports-http</artifactId>
                 <version>${version.org.apache.cxf}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-api</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-core</artifactId>
+                    </exclusion>                    
+                </exclusions>                    
             </dependency>
             <dependency>
                 <groupId>org.apache.cxf</groupId>
                 <artifactId>cxf-rt-ws-security</artifactId>
                 <version>${version.org.apache.cxf}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-bindings-soap</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-api</artifactId>
+                    </exclusion>      
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-core</artifactId>
+                    </exclusion>                                    
+                </exclusions>                 
             </dependency>
             <dependency>
                 <groupId>org.apache.cxf</groupId>
                 <artifactId>cxf-rt-ws-policy</artifactId>
                 <version>${version.org.apache.cxf}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-api</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-core</artifactId>
+                    </exclusion>                                                            
+                </exclusions>                  
             </dependency>
+             -->
+	        <dependency>
+	            <groupId>org.apache.cxf</groupId>
+	            <artifactId>cxf-rt-rs-client</artifactId>
+	            <version>${version.org.apache.cxf}</version>
+	        </dependency>              
             <dependency>
                 <groupId>org.apache.cxf</groupId>
                 <artifactId>cxf-rt-frontend-jaxrs</artifactId>
-                <version>${version.org.apache.cxf-jaxrs}</version>
+                <version>${version.org.apache.cxf}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-bindings-xml</artifactId>
+                    </exclusion>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-api</artifactId>
+                    </exclusion>      
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-core</artifactId>
+                    </exclusion>                                   
+                </exclusions>                
             </dependency>
+            <!-- 
+			<dependency>
+			    <groupId>org.apache.cxf</groupId>
+			    <artifactId>cxf-rt-transports-http-hc</artifactId>
+			    <version>${version.org.apache.cxf}</version>
+			</dependency>
+			 
+	        <dependency>
+	            <groupId>org.apache.httpcomponents</groupId>
+	            <artifactId>httpcore-nio</artifactId>
+	            <version>${version.org.apache.httpcomponents.httpcore-nio}</version>
+	        </dependency>
+			<dependency>
+			    <groupId>org.apache.httpcomponents</groupId>
+			    <artifactId>httpasyncclient</artifactId>
+			    <version>${version.org.apache.httpcomponents.httpasyncclient}</version>
+			</dependency>
+			
             <dependency>
                 <groupId>org.apache.cxf</groupId>
                 <artifactId>cxf-bundle</artifactId>
-                <version>2.6.8</version>
+                <version>${version.org.apache.cxf}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-api</artifactId>
+                    </exclusion>      
+                    <exclusion>
+                        <groupId>org.apache.cxf</groupId>
+                        <artifactId>cxf-rt-core</artifactId>
+                    </exclusion>                                   
+                </exclusions>                  
             </dependency>
+            -->
+            <dependency>
+                <groupId>org.apache.cxf</groupId>
+                <artifactId>cxf-rt-rs-security-oauth</artifactId>
+                <version>${version.org.apache.cxf}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.cxf</groupId>
+                <artifactId>cxf-rt-rs-security-oauth2</artifactId>
+                <version>${version.org.apache.cxf}</version>
+            </dependency>
+            <dependency>
+              <groupId>org.apache.cxf</groupId>
+              <artifactId>cxf-rt-rs-security-oauth2-saml</artifactId>
+              <version>${version.org.apache.cxf}</version>
+            </dependency>
+	        <dependency>
+	            <groupId>org.apache.cxf</groupId>
+	            <artifactId>cxf-bundle</artifactId>
+	            <version>${version.org.apache.cxf}</version>
+	            <scope>test</scope>
+	        </dependency>            
+            <!--                                      
+            <dependency>
+                <groupId>org.apache.cxf</groupId>
+                <artifactId>cxf-rt-bindings-xml</artifactId>
+                <version>${version.org.apache.cxf}</version>
+            </dependency>
+             -->
+            <dependency>
+                <groupId>net.oauth.core</groupId>
+                <artifactId>oauth</artifactId>
+                <version>${version.net.oauth.core}</version>
+            </dependency>                         
             <dependency>
                 <groupId>com.datastax.cassandra</groupId>
                 <artifactId>cassandra-driver-core</artifactId>
@@ -1013,11 +1230,27 @@
                 <artifactId>metrics-core</artifactId>
                 <version>${version.com.codahale.metrics.metrics-core}</version>                
             </dependency>      
-            <dependency>
+<!--             <dependency>
               <groupId>org.apache.httpcomponents</groupId>
               <artifactId>httpclient</artifactId>
-              <version>${version.org.apache.httpcomponents}</version>
+              <version>${version.org.apache.httpcomponents.httpclient}</version>
             </dependency> 
+            <dependency>
+                <groupId>org.apache.httpcomponents</groupId>
+                <artifactId>httpcore</artifactId>
+                <version>${version.org.apache.httpcomponents.httpcore}</version>
+            </dependency> 
+            <dependency>
+                <groupId>org.apache.httpcomponents</groupId>
+                <artifactId>httpmime</artifactId>
+                <version>${version.org.apache.httpcomponents.httpclient}</version>
+            </dependency>    
+                   
+            <dependency>
+                <groupId>log4j</groupId>
+                <artifactId>log4j</artifactId>
+                <version>${version.log4j}</version>
+            </dependency>  -->                                    
             <dependency>
                 <groupId>com.amazonaws</groupId>
                 <artifactId>aws-java-sdk</artifactId>
@@ -1053,7 +1286,6 @@
                 <artifactId>zookeeper</artifactId>
                 <version>${version.zookeeper}</version>
             </dependency>
-        
             <dependency>
                 <groupId>org.apache.poi</groupId>
                 <artifactId>poi</artifactId>
@@ -1069,20 +1301,20 @@
                 <artifactId>poi-ooxml-schemas</artifactId>
                 <version>${version.org.apache.poi}</version>
             </dependency>
-            <dependency>
+<!--             <dependency>
                 <groupId>dom4j</groupId>
                 <artifactId>dom4j</artifactId>
                 <version>${version.dom4j}</version>
-            </dependency>
+            </dependency> -->
             <dependency>
                 <groupId>org.apache.xmlbeans</groupId>
                 <artifactId>xmlbeans</artifactId>
                 <version>${version.org.apache.xmlbeans}</version>
             </dependency>
-            <dependency>
+            <!--dependency>
               <groupId>org.infinispan</groupId>
               <artifactId>infinispan-query</artifactId>
-              <version>${version.org.infinispan}</version>
+              <version>${version.org.infinispan.6}</version-->
               <!-- 
                 <exclusions>                
                     <exclusion>
@@ -1094,17 +1326,17 @@
                         <artifactId>hibernate-search-infinispan</artifactId>
                     </exclusion>                    
                 </exclusions>
-                 -->               
-            </dependency>
-            <dependency>
+                 -->
+            <!--/dependency-->
+<!--             <dependency>
             	<groupId>org.fusesource.jansi</groupId>
             	<artifactId>jansi</artifactId>
             	<version>1.2.1</version>
-        	</dependency>
+        	</dependency> -->
 			<dependency>
 				<groupId>jline</groupId>
 				<artifactId>jline</artifactId>
-				<version>0.9.94</version>
+				<version>2.11</version>
 				<exclusions>
 					<exclusion>
 						<groupId>junit</groupId>
@@ -1132,31 +1364,46 @@
                 <artifactId>noggit</artifactId>
                 <version>${version.noggit}</version>
             </dependency>
-            <dependency>
+            <!--dependency>
                 <groupId>org.hibernate</groupId>
                 <artifactId>hibernate-search</artifactId>
-                <version>${version.org.hibernate.search}</version>
+                <version>${version.org.infinispan.hibernate.search}</version>
             </dependency>
             <dependency>
                <groupId>org.hibernate</groupId>
                <artifactId>hibernate-search-engine</artifactId>
-               <version>${version.org.hibernate.search}</version>
-            </dependency>
-            <dependency>
+               <version>${version.org.infinispan.hibernate.search}</version>
+            </dependency-->
+            <!--dependency>
                 <groupId>org.hibernate</groupId>
                 <artifactId>hibernate-search-infinispan</artifactId>
-                <version>${version.org.hibernate.search}</version>
-            </dependency>            
-            <dependency>
+                <version>${version.org.hibernate}</version>
+            </dependency-->            
+            <!--dependency>
                 <groupId>org.infinispan</groupId>
                 <artifactId>infinispan-client-hotrod</artifactId>
-                <version>${version.org.infinispan}</version>
-            </dependency>
+                <version>${version.org.infinispan.6}</version>
+            </dependency-->
             <dependency>
               <groupId>org.mongodb</groupId>
               <artifactId>mongo-java-driver</artifactId>
               <version>${version.org.mongodb.mongo-java-driver}</version>
             </dependency>
+            <dependency>
+              <groupId>org.apache.phoenix</groupId>
+              <artifactId>phoenix-core</artifactId>
+              <version>${version.org.apache.phoenix.phoenix-core}</version>
+           </dependency>
+           <dependency>
+              <groupId>org.codehaus.btm</groupId>
+              <artifactId>btm</artifactId>
+              <version>${version.org.codehaus.btm}</version>
+           </dependency>
+<!--             <dependency>
+              <groupId>org.slf4j</groupId>
+              <artifactId>slf4j-api</artifactId>
+              <version>1.7.2.redhat-3</version>
+           </dependency> -->
            <dependency>
               <groupId>org.jboss.teiid.connectors.google</groupId>
               <artifactId>gdata-spreadsheet</artifactId>
@@ -1186,7 +1433,7 @@
 			<dependency>
 				<groupId>org.dbunit</groupId>
 				<artifactId>dbunit</artifactId>
-				<version>2.2</version>
+				<version>${version.org.dbunit}</version>
 			</dependency>	
             <dependency>
                 <groupId>org.codehaus.groovy</groupId>
@@ -1198,12 +1445,184 @@
                 <artifactId>mysql-connector-java</artifactId>
                 <version>${mysql.connector.version}</version>
             </dependency>
+            <!-- 
             <dependency>
                 <groupId>org.jboss.spec</groupId>
                 <artifactId>jboss-javaee-6.0</artifactId>
                 <version>${version.org.jboss.spec.jboss-javaee-6.0}</version>
                 <type>pom</type>
             </dependency>
+             -->
+            <dependency>
+                <groupId>de.flapdoodle.embed</groupId>
+                <artifactId>de.flapdoodle.embed.mongo</artifactId>
+                <version>${version.de.flapdoodle.embed.mongo}</version>
+            </dependency>
+            <dependency>
+              <groupId>org.apache.olingo</groupId>
+              <artifactId>odata-commons-api</artifactId>
+              <version>${version.org.apache.olingo}</version>  
+            </dependency>  
+            <dependency>
+              <groupId>org.apache.olingo</groupId>
+              <artifactId>odata-commons-core</artifactId>
+              <version>${version.org.apache.olingo}</version>  
+            </dependency>             
+            <dependency>
+              <groupId>org.apache.olingo</groupId>
+              <artifactId>odata-server-api</artifactId>
+              <version>${version.org.apache.olingo}</version>
+            </dependency>  
+            <dependency>
+              <groupId>org.apache.olingo</groupId>
+              <artifactId>odata-server-core</artifactId>
+              <version>${version.org.apache.olingo}</version>  
+            </dependency>
+            <dependency>
+              <groupId>org.apache.olingo</groupId>
+              <artifactId>odata-server-core-ext</artifactId>
+              <version>${version.org.apache.olingo}</version>  
+            </dependency>
+            <dependency>
+              <groupId>org.apache.olingo</groupId>
+              <artifactId>odata-client-api</artifactId>
+              <version>${version.org.apache.olingo}</version>
+            </dependency>  
+            <dependency>
+              <groupId>org.apache.olingo</groupId>
+              <artifactId>odata-client-core</artifactId>
+              <version>${version.org.apache.olingo}</version>  
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-server</artifactId>
+                <version>${version.org.eclipse.jetty}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-servlet</artifactId>
+                <version>${version.org.eclipse.jetty}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-http</artifactId>
+                <version>${version.org.eclipse.jetty}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>org.eclipse.jetty</groupId>
+                <artifactId>jetty-client</artifactId>
+                <version>${version.org.eclipse.jetty}</version>
+                <scope>test</scope>
+            </dependency>
+            <dependency>
+                <groupId>commons-codec</groupId>
+                <artifactId>commons-codec</artifactId>
+                <version>${version.commons-codec}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.antlr</groupId>
+                <artifactId>antlr4-runtime</artifactId>
+                <version>${version.org.antlr}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>${version.org.apache.commons}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-core</artifactId>
+                <version>${version.com.fasterxml.jackson.core}</version>
+            </dependency>                        
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-databind</artifactId>
+                <version>${version.com.fasterxml.jackson.core}</version>
+            </dependency>            
+            <dependency>
+                <groupId>com.fasterxml.jackson.core</groupId>
+                <artifactId>jackson-annotations</artifactId>
+                <version>${version.com.fasterxml.jackson.core}</version>
+            </dependency>  
+    	    <dependency>
+        		<groupId>org.eclipse.persistence</groupId>
+        		<artifactId>eclipselink</artifactId>
+        		<version>${version.org.eclipse.persistence}</version>
+    	    </dependency>
+<!--             <dependency>
+                <groupId>javax.ws.rs</groupId>
+                <artifactId>javax.ws.rs-api</artifactId>
+                <version>${version.javax.ws.rs}</version>
+            </dependency> -->
+            <dependency>
+                <groupId>org.springframework</groupId>
+                <artifactId>spring-beans</artifactId>
+                <version>${version.org.springframework}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework</groupId>
+                <artifactId>spring-context</artifactId>
+                <version>${version.org.springframework}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.springframework</groupId>
+                <artifactId>spring-core</artifactId>
+                <version>${version.org.springframework}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.facebook.presto</groupId>
+                <artifactId>presto-jdbc</artifactId>
+                <version>${version.com.facebook.presto}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.vividsolutions</groupId>
+                <artifactId>jts</artifactId>
+                <version>${version.jts}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.wololo</groupId>
+                <artifactId>jts2geojson</artifactId>
+                <version>${version.jts2geojson}</version>
+            </dependency>
+            <dependency>
+                <groupId>org.osgeo</groupId>
+                <artifactId>proj4j</artifactId>
+                <version>${version.proj4j}</version>
+            </dependency>
+	       <dependency>
+                <groupId>io.swagger</groupId>
+                <artifactId>swagger-jaxrs</artifactId>
+                <version>${version.swagger-jaxrs}</version>
+                <exclusions>
+                    <exclusion>
+                        <groupId>javax.ws.rs</groupId>
+                        <artifactId>jsr311-api</artifactId>
+                    </exclusion>
+                </exclusions>
+            </dependency>
+            <dependency>
+                <groupId>org.jboss.narayana.jta</groupId>
+                <artifactId>narayana-jta</artifactId>
+                <version>${version.org.jboss.narayana}</version>
+            </dependency>
+<!-- 	        <dependency>
+	            <groupId>org.picketbox</groupId>
+	            <artifactId>picketbox</artifactId>
+	            <version>${version.org.picketbox}</version>
+	        </dependency>  -->
+			<dependency>
+			    <groupId>com.fasterxml</groupId>
+			    <artifactId>aalto-xml</artifactId>
+			    <version>${version.com.fasterxml.aalto-xml}</version>
+			</dependency>
+	        <dependency>
+	            <groupId>commons-configuration</groupId>
+	            <artifactId>commons-configuration</artifactId>
+	            <version>${version.commons-configuration}</version>
+	        </dependency>
         </dependencies>
 	</dependencyManagement>
 	<modules>
@@ -1216,10 +1635,14 @@
 		<module>runtime</module>
 		<module>adminshell</module>
 		<module>hibernate-dialect</module>
-        <module>jboss-integration</module>
+		<module>eclipselink-platform</module>
+		<module>jboss-integration</module>
+		<module>jboss-security</module>
 		<module>test-integration</module>
-        <module>client-jdk15</module>
+		<module>client-jdk15</module>
 		<module>admin</module>
-        <module>odata</module>
-  </modules>
+		<module>jboss-admin</module>
+		<module>odata</module>
+		<module>olingo</module>
+	</modules>
 </project>

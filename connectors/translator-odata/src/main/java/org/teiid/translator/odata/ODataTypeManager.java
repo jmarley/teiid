@@ -56,8 +56,8 @@ public class ODataTypeManager {
 		teiidkeyed.put(DataTypeManager.DefaultDataTypes.TIMESTAMP,  EdmSimpleType.DATETIME);
 		teiidkeyed.put(DataTypeManager.DefaultDataTypes.OBJECT,  EdmSimpleType.BINARY); //currently problematic
 		teiidkeyed.put(DataTypeManager.DefaultDataTypes.BLOB, EdmSimpleType.BINARY);
-		teiidkeyed.put(DataTypeManager.DefaultDataTypes.CLOB, EdmSimpleType.BINARY);
-		teiidkeyed.put(DataTypeManager.DefaultDataTypes.XML, EdmSimpleType.BINARY);
+		teiidkeyed.put(DataTypeManager.DefaultDataTypes.CLOB, EdmSimpleType.STRING);
+		teiidkeyed.put(DataTypeManager.DefaultDataTypes.XML, EdmSimpleType.STRING);
 		teiidkeyed.put(DataTypeManager.DefaultDataTypes.VARBINARY, EdmSimpleType.BINARY);
 		
 		odatakeyed.put(EdmSimpleType.STRING.getFullyQualifiedTypeName(), DataTypeManager.DefaultDataTypes.STRING);
@@ -73,17 +73,30 @@ public class ODataTypeManager {
 		odatakeyed.put(EdmSimpleType.TIME.getFullyQualifiedTypeName(), DataTypeManager.DefaultDataTypes.TIME);
 		odatakeyed.put(EdmSimpleType.DATETIME.getFullyQualifiedTypeName(), DataTypeManager.DefaultDataTypes.TIMESTAMP);
 		odatakeyed.put(EdmSimpleType.DATETIMEOFFSET.getFullyQualifiedTypeName(), DataTypeManager.DefaultDataTypes.TIMESTAMP);
-		odatakeyed.put(EdmSimpleType.BINARY.getFullyQualifiedTypeName(), DataTypeManager.DefaultDataTypes.BLOB);
+		odatakeyed.put(EdmSimpleType.BINARY.getFullyQualifiedTypeName(), DataTypeManager.DefaultDataTypes.VARBINARY);
 		odatakeyed.put(EdmSimpleType.GUID.getFullyQualifiedTypeName(), DataTypeManager.DefaultDataTypes.STRING);
 	}
 	
 	public static String teiidType(String odataType) {
+        if (odataType.startsWith(CollectionKind.Bag.name() + "(")
+                && odataType.endsWith(")")) {
+            odataType = odataType.substring(4, odataType.length() - 1);
+            return odatakeyed.get(odataType)+"[]";
+        } else if (odataType.startsWith(CollectionKind.List.name() + "(")
+                && odataType.endsWith(")")) {
+            odataType = odataType.substring(5, odataType.length() - 1);
+            return odatakeyed.get(odataType)+"[]";
+        } else if (odataType.startsWith(CollectionKind.Collection.name() + "(")
+                && odataType.endsWith(")")) {
+            odataType = odataType.substring(11, odataType.length() - 1);
+            return odatakeyed.get(odataType)+"[]";
+        }	    
 		return odatakeyed.get(odataType);
 	}
 	
 	public static EdmType odataType(String teiidType) {
 		if (DataTypeManager.isArrayType(teiidType)) {
-			return new EdmCollectionType(CollectionKind.List, odataType(DataTypeManager.getComponentType(teiidType)));
+			return new EdmCollectionType(CollectionKind.Collection, odataType(DataTypeManager.getComponentType(teiidType)));
 		}
 		return teiidkeyed.get(teiidType);
 	}

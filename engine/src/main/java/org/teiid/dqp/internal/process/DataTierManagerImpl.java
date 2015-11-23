@@ -54,6 +54,7 @@ import org.teiid.core.TeiidComponentException;
 import org.teiid.core.TeiidException;
 import org.teiid.core.TeiidProcessingException;
 import org.teiid.core.TeiidRuntimeException;
+import org.teiid.core.types.ArrayImpl;
 import org.teiid.core.types.BlobType;
 import org.teiid.core.types.ClobImpl;
 import org.teiid.core.types.ClobType;
@@ -80,6 +81,7 @@ import org.teiid.logging.LogManager;
 import org.teiid.logging.MessageLevel;
 import org.teiid.metadata.*;
 import org.teiid.metadata.Table.TriggerEvent;
+import org.teiid.metadata.Table.Type;
 import org.teiid.query.QueryPlugin;
 import org.teiid.query.metadata.CompositeMetadataStore;
 import org.teiid.query.metadata.CompositeMetadataStore.RecordHolder;
@@ -185,13 +187,18 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 		KEYCOLUMNS,
 		PROCEDUREPARAMS,
 		REFERENCEKEYCOLUMNS,
-		PROPERTIES
+		PROPERTIES,
+		FUNCTIONS,
+		FUNCTIONPARAMS,
 	}
 	
 	private enum SystemAdminTables {
 		MATVIEWS,
 		VDBRESOURCES,
-		TRIGGERS
+		TRIGGERS,
+		VIEWS,
+		STOREDPROCEDURES,
+		USAGE
 	}
 	
 	private enum SystemAdminProcs {
@@ -204,6 +211,7 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 	
 	private enum SystemProcs {
 		GETXMLSCHEMAS,
+		ARRAYITERATE
 	}
 	
 	private static final TreeMap<String, Integer> levelMap = new TreeMap<String, Integer>(String.CASE_INSENSITIVE_ORDER);
@@ -374,13 +382,34 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 				row.add(null);
 			}
 		});
+        name = SystemTables.FUNCTIONS.name();
+        columns = getColumns(tm, name);
+        systemTables.put(SystemTables.FUNCTIONS, new RecordExtractionTable<FunctionMethod>(new FunctionSystemTable(1, 4, columns), columns) {
+			
+        	@Override
+        	public void fillRow(List<Object> row, FunctionMethod proc,
+        			VDBMetaData v, TransformationMetadata metadata,
+        			CommandContext cc, SimpleIterator<FunctionMethod> iter) {
+				row.add(v.getName());
+				if (proc.getParent() != null) {
+					row.add(proc.getParent().getName());
+				} else {
+					row.add(CoreConstants.SYSTEM_MODEL);
+				}
+				row.add(proc.getName());
+				row.add(proc.getNameInSource());
+				row.add(proc.getUUID());
+				row.add(proc.getAnnotation());
+				row.add(proc.isVarArgs());
+			}
+		});
         name = SystemTables.DATATYPES.name();
         columns = getColumns(tm, name);
         systemTables.put(SystemTables.DATATYPES, new RecordExtractionTable<Datatype>(new RecordTable<Datatype>(new int[] {0}, columns) {
         	
         	@Override
         	public SimpleIterator<Datatype> processQuery(VDBMetaData vdb,
-        			CompositeMetadataStore metadataStore, BaseIndexInfo<?> ii) {
+        			CompositeMetadataStore metadataStore, BaseIndexInfo<?> ii, TransformationMetadata metadata) {
         		return processQuery(vdb, metadataStore.getDatatypes(), ii);
         	}
         }, columns) {
@@ -479,6 +508,45 @@ public class DataTierManagerImpl implements ProcessorDataManager {
         	}
         	
         });
+        name = SystemTables.FUNCTIONPARAMS.name();
+        columns = getColumns(tm, name);
+        systemTables.put(SystemTables.FUNCTIONPARAMS, new ChildRecordExtractionTable<FunctionMethod, FunctionParameter>(new FunctionSystemTable(1, 3, columns), columns) {
+        	@Override
+        	public void fillRow(List<Object> row, FunctionParameter param,
+        			VDBMetaData vdb, TransformationMetadata metadata,
+        			CommandContext cc, SimpleIterator<FunctionParameter> iter) {
+				row.add(vdb.getName());
+				FunctionMethod parent = ((ExpandingSimpleIterator<FunctionMethod, FunctionParameter>)iter).getCurrentParent();
+				if (parent.getParent() == null) {
+					row.add(CoreConstants.SYSTEM_MODEL);
+				} else {
+					row.add(parent.getParent().getName());
+				}
+				row.add(parent.getName());
+				row.add(parent.getUUID());
+				row.add(param.getName());
+				row.add(param.getRuntimeType());
+				row.add(param.getPosition());
+				row.add(param.getPosition()==0?"ReturnValue":"In"); //$NON-NLS-1$ //$NON-NLS-2$
+				row.add(param.getPrecision());
+				row.add(param.getLength());
+				row.add(param.getScale());
+				row.add(param.getRadix());
+				row.add(param.getNullType().toString());
+				row.add(param.getUUID());
+				row.add(param.getAnnotation());
+				row.add(null);
+        	}
+        	
+        	@Override
+        	protected Collection<? extends FunctionParameter> getChildren(final FunctionMethod parent) {
+        		ArrayList<FunctionParameter> result = new ArrayList<FunctionParameter>(parent.getInputParameters().size() + 1);
+        		result.addAll(parent.getInputParameters());
+        		result.add(parent.getOutputParameter());
+        		return result;
+        	}
+        	
+        });
         name = SystemTables.PROPERTIES.name();
         columns = getColumns(tm, name);
         systemTables.put(SystemTables.PROPERTIES, new ChildRecordExtractionTable<AbstractMetadataRecord, Map.Entry<String, String>>(
@@ -492,7 +560,7 @@ public class DataTierManagerImpl implements ProcessorDataManager {
         			@Override
         			public SimpleIterator<AbstractMetadataRecord> processQuery(
         					VDBMetaData vdb, CompositeMetadataStore metadataStore,
-        					BaseIndexInfo<?> ii) {
+        					BaseIndexInfo<?> ii, TransformationMetadata metadata) {
         				return processQuery(vdb, metadataStore.getOids(), ii);
         			}
         			
@@ -562,6 +630,55 @@ public class DataTierManagerImpl implements ProcessorDataManager {
         		return cols;
         	}
         });        
+        name = SystemAdminTables.VIEWS.name();
+        columns = getColumns(tm, name);
+        systemAdminTables.put(SystemAdminTables.VIEWS, new RecordExtractionTable<Table>(new TableSystemTable(1, 2, columns) {
+        	@Override
+        	protected boolean isValid(Table s, VDBMetaData vdb,
+        			List<Object> rowBuffer, Criteria condition)
+        			throws TeiidProcessingException, TeiidComponentException {
+        		if (s == null || !s.isVirtual()) {
+        			return false;
+        		}
+        		return super.isValid(s, vdb, rowBuffer, condition);
+        	}
+        }, columns) {
+			
+			@Override
+			public void fillRow(List<Object> row, Table table,
+					VDBMetaData v, TransformationMetadata m, CommandContext cc, SimpleIterator<Table> iter) {
+				row.add(v.getName());
+				row.add(table.getParent().getName());
+				row.add(table.getName());
+				row.add(new ClobType(new ClobImpl(table.getSelectTransformation())));
+				row.add(table.getUUID());
+			}
+		});
+        name = SystemAdminTables.STOREDPROCEDURES.name();
+        columns = getColumns(tm, name);
+        systemAdminTables.put(SystemAdminTables.STOREDPROCEDURES, new RecordExtractionTable<Procedure>(new ProcedureSystemTable(1, 2, columns) {
+        	@Override
+        	protected boolean isValid(Procedure s, VDBMetaData vdb,
+        			List<Object> rowBuffer, Criteria condition)
+        			throws TeiidProcessingException, TeiidComponentException {
+        		if (s == null || !s.isVirtual()) {
+        			return false;
+        		}
+        		return super.isValid(s, vdb, rowBuffer, condition);
+        	}
+        }, columns) {
+        	
+        	@Override
+        	public void fillRow(List<Object> row, Procedure proc,
+        			VDBMetaData v, TransformationMetadata m, CommandContext cc,
+        			SimpleIterator<Procedure> iter) {
+				row.add(v.getName());
+				row.add(proc.getParent().getName());
+				row.add(proc.getName());
+				row.add(new ClobType(new ClobImpl(proc.getQueryPlan())));
+				row.add(proc.getUUID());
+			}
+		});
         name = SystemTables.COLUMNS.name();
         columns = getColumns(tm, name);
         systemTables.put(SystemTables.COLUMNS, new ChildRecordExtractionTable<Table, Column>(new TableSystemTable(1, 2, columns), columns) {
@@ -682,12 +799,12 @@ public class DataTierManagerImpl implements ProcessorDataManager {
         			CommandContext cc, SimpleIterator<List<?>> iter) {
         		row.add(vdb.getName());
         		ForeignKey key = (ForeignKey) record.get(0);
-        		Table pkTable = key.getPrimaryKey().getParent();
+        		Table pkTable = key.getReferenceKey().getParent();
         		Column column = (Column) record.get(1);
         		Short pos = (Short) record.get(2);
 				row.add(pkTable.getParent().getName());
 				row.add(pkTable.getName());
-				row.add(key.getPrimaryKey().getColumns().get(pos-1).getName());
+				row.add(key.getReferenceKey().getColumns().get(pos-1).getName());
 				row.add(vdb.getName());
 				row.add(key.getParent().getParent().getName());
 				row.add(key.getParent().getName());
@@ -696,7 +813,7 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 				row.add(DatabaseMetaData.importedKeyNoAction);
 				row.add(DatabaseMetaData.importedKeyNoAction);
 				row.add(key.getName());
-				row.add(key.getPrimaryKey().getName());
+				row.add(key.getReferenceKey().getName());
 				row.add(DatabaseMetaData.importedKeyInitiallyDeferred);
         	}
         	
@@ -713,6 +830,81 @@ public class DataTierManagerImpl implements ProcessorDataManager {
         		return cols;
         	}
         });
+        name = SystemAdminTables.USAGE.name();
+        columns = getColumns(tm, name);
+        systemAdminTables.put(SystemAdminTables.USAGE, new ChildRecordExtractionTable<AbstractMetadataRecord, AbstractMetadataRecord>(
+        		new RecordTable<AbstractMetadataRecord>(new int[] {0}, columns.subList(1, 2)) {
+        			@Override
+        			protected void fillRow(AbstractMetadataRecord s,
+        					List<Object> rowBuffer) {
+        				rowBuffer.add(s.getUUID());
+        			}
+        			
+        			@Override
+        			public SimpleIterator<AbstractMetadataRecord> processQuery(
+        					VDBMetaData vdb, CompositeMetadataStore metadataStore,
+        					BaseIndexInfo<?> ii, TransformationMetadata metadata) {
+        				return processQuery(vdb, metadataStore.getOids(), ii);
+        			}
+        			
+        			@Override
+        			protected AbstractMetadataRecord extractRecord(Object val) {
+        				if (val != null) {
+        					return ((RecordHolder)val).getRecord();
+        				}
+        				return null;
+        			}
+        		}, columns) {
+        	
+        	@Override
+        	public void fillRow(List<Object> row, AbstractMetadataRecord entry, VDBMetaData vdb, TransformationMetadata metadata, CommandContext cc, SimpleIterator<AbstractMetadataRecord> iter) {
+				AbstractMetadataRecord currentParent = ((ExpandingSimpleIterator<AbstractMetadataRecord, AbstractMetadataRecord>)iter).getCurrentParent();
+				row.add(vdb.getName());
+				row.add(currentParent.getUUID());
+				row.add(getType(currentParent));
+				row.add(currentParent.getParent().getName());
+				row.add(currentParent.getName());
+				row.add(null); //column usage not yet supported
+				row.add(entry.getUUID());
+				row.add(getType(entry));
+				if (entry instanceof Column) {
+					row.add(entry.getParent().getParent().getName());
+					row.add(entry.getParent().getName());
+					row.add(entry.getName()); 
+				} else {
+					row.add(entry.getParent().getName());
+					row.add(entry.getName());
+					row.add(null);
+				}
+        	}
+        	
+        	private String getType(AbstractMetadataRecord record) {
+        		if (record instanceof Table) {
+        			Table t = (Table)record;
+        			if (t.getTableType() == Type.Table && t.isVirtual()) {
+        				//TODO: this change should be on the Table object as well
+        				return "View"; //$NON-NLS-1$
+        			}
+        			return t.getTableType().name();
+        		}
+        		if (record instanceof Procedure) {
+        			Procedure p = (Procedure)record;
+        			if (p.isFunction()) {
+            			return p.getType().name();
+        			}
+        			if (p.isVirtual()) {
+        				return "StoredProcedure"; //$NON-NLS-1$
+        			}
+        			return "ForeignProcedure"; //$NON-NLS-1$
+        		}
+        		return record.getClass().getSimpleName();
+        	}
+        	
+        	@Override
+        	protected Collection<AbstractMetadataRecord> getChildren(AbstractMetadataRecord parent) {
+        		return parent.getIncomingObjects();
+        	}
+		});
     }        
 
 	private List<ElementSymbol> getColumns(TransformationMetadata tm,
@@ -1086,8 +1278,24 @@ public class DataTierManagerImpl implements ProcessorDataManager {
 				 throw new TeiidProcessingException(QueryPlugin.Event.TEIID30553, e);
 			}
 			break;
+		case ARRAYITERATE:
+			Object array = ((Constant)proc.getParameter(1).getExpression()).getValue();
+			if (array != null) {
+				Object[] vals = null;
+				if (array instanceof Object[]) {
+					vals = (Object[])array;
+				} else {
+					ArrayImpl arrayImpl = (ArrayImpl)array;
+					vals = arrayImpl.getValues();
+				}
+				for (Object o : vals) {
+					rows.add(Arrays.asList(o));
+				}
+			}
 		}
 		return new CollectionTupleSource(rows.iterator());
+		
+			
 	}
 	
 	public MetadataRepository getMetadataRepository(AbstractMetadataRecord target, VDBMetaData vdb) {

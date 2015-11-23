@@ -34,30 +34,43 @@ import java.util.*;
 
 import javax.resource.cci.ConnectionFactory;
 
+import org.bson.types.Binary;
 import org.teiid.core.types.*;
 import org.teiid.language.*;
 import org.teiid.language.visitor.SQLStringVisitor;
+import org.teiid.metadata.FunctionMethod;
 import org.teiid.metadata.RuntimeMetadata;
 import org.teiid.mongodb.MongoDBConnection;
 import org.teiid.translator.*;
 import org.teiid.translator.jdbc.AliasModifier;
 import org.teiid.translator.jdbc.FunctionModifier;
 
-import com.mongodb.BasicDBList;
-import com.mongodb.BasicDBObject;
-import com.mongodb.DB;
-import com.mongodb.DBRef;
+import com.mongodb.*;
 import com.mongodb.gridfs.GridFS;
 import com.mongodb.gridfs.GridFSDBFile;
 import com.mongodb.gridfs.GridFSInputFile;
 
 @Translator(name="mongodb", description="MongoDB Translator, reads and writes the data to MongoDB")
 public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory, MongoDBConnection> {
-    public static final Version TWO_4 = Version.getVersion("2.4"); //$NON-NLS-1$
+	private static final String MONGO = "mongo"; //$NON-NLS-1$
+	public static final Version TWO_4 = Version.getVersion("2.4"); //$NON-NLS-1$
     public static final Version TWO_6 = Version.getVersion("2.6"); //$NON-NLS-1$
+    public static final Version THREE_0 = Version.getVersion("3.0"); //$NON-NLS-1$
+    
+    public static final String FUNC_GEO_WITHIN = "geoWithin"; //$NON-NLS-1$
+	public static final String FUNC_GEO_INTERSECTS = "geoIntersects"; //$NON-NLS-1$
+	public static final String FUNC_GEO_NEAR = "geoNear"; //$NON-NLS-1$
+	public static final String FUNC_GEO_NEAR_SPHERE = "geoNearSphere"; //$NON-NLS-1$
+    public static final String FUNC_GEO_POLYGON_WITHIN = "geoPolygonWithin"; //$NON-NLS-1$
+	public static final String FUNC_GEO_POLYGON_INTERSECTS = "geoPolygonIntersects"; //$NON-NLS-1$
+	
+	public static final String[] GEOSPATIAL_FUNCTIONS = {FUNC_GEO_WITHIN, FUNC_GEO_INTERSECTS, FUNC_GEO_NEAR, FUNC_GEO_NEAR_SPHERE, FUNC_GEO_POLYGON_WITHIN, FUNC_GEO_POLYGON_INTERSECTS};
+	public static final String AVOID_PROJECTION = "AVOID_PROJECTION"; //$NON-NLS-1$
     
 	protected Map<String, FunctionModifier> functionModifiers = new TreeMap<String, FunctionModifier>(String.CASE_INSENSITIVE_ORDER);
-	private Version version = TWO_4;
+	private Version version = TWO_6;
+	private boolean useDisk = true;
+	private boolean supportsAggregatesCount = true;
 	
 	public MongoDBExecutionFactory() {
 		setSupportsOrderBy(true);
@@ -66,7 +79,13 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
 		setSourceRequiredForMetadata(false);
 		setSupportsInnerJoins(true);
 		setSupportsOuterJoins(true);
-		setSupportedJoinCriteria(SupportedJoinCriteria.KEY);
+		setSupportedJoinCriteria(SupportedJoinCriteria.KEY);		
+	}
+
+	@SuppressWarnings("nls")
+	@Override
+	public void start() throws TranslatorException {
+		super.start();
 		
         registerFunctionModifier("+", new AliasModifier("$add"));//$NON-NLS-1$ //$NON-NLS-2$
         registerFunctionModifier("-", new AliasModifier("$subtract"));//$NON-NLS-1$ //$NON-NLS-2$
@@ -79,9 +98,25 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
             @Override
             public List<?> translate(Function function) {
                 function.setName("$substr"); //$NON-NLS-1$
+
+                ArrayList<Expression> params = new ArrayList<Expression>();
+                
+                params.add(function.getParameters().get(0));
+                        
+                // MongoDB is zero base index; Teiid is 1 based;
+                params.add(LanguageFactory.INSTANCE.createFunction("-", new Expression[] { function.getParameters().get(1),
+                        LanguageFactory.INSTANCE.createLiteral(1, TypeFacility.RUNTIME_TYPES.INTEGER) },
+                        TypeFacility.RUNTIME_TYPES.INTEGER));
+                
                 if (function.getParameters().size() == 2) {
-                    function.getParameters().add(new Literal(DataTypeManager.MAX_STRING_LENGTH, TypeFacility.RUNTIME_TYPES.INTEGER));
+                    function.getParameters().add(LanguageFactory.INSTANCE.createLiteral(DataTypeManager.MAX_STRING_LENGTH,
+                            TypeFacility.RUNTIME_TYPES.INTEGER));
                 }
+                
+                params.add(function.getParameters().get(2));
+                
+                function.getParameters().clear();
+                function.getParameters().addAll(params);
                 return null;
             }
         });
@@ -97,12 +132,70 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
         registerFunctionModifier(SourceSystemFunctions.HOUR, new AliasModifier("$hour"));//$NON-NLS-1$
         registerFunctionModifier(SourceSystemFunctions.MINUTE, new AliasModifier("$minute"));//$NON-NLS-1$
         registerFunctionModifier(SourceSystemFunctions.SECOND, new AliasModifier("$second"));//$NON-NLS-1$
-        registerFunctionModifier(SourceSystemFunctions.IFNULL, new AliasModifier("$ifNull")); //$NON-NLS-1$
+        registerFunctionModifier(SourceSystemFunctions.IFNULL, new AliasModifier("$ifNull")); //$NON-NLS-1$		
+		
+        FunctionMethod method = null;
+        method = addPushDownFunction(MONGO, FUNC_GEO_INTERSECTS, TypeFacility.RUNTIME_NAMES.BOOLEAN, TypeFacility.RUNTIME_NAMES.STRING, TypeFacility.RUNTIME_NAMES.STRING, TypeFacility.RUNTIME_NAMES.DOUBLE+"[][]"); //$NON-NLS-1$ 
+        method.setProperty(AVOID_PROJECTION, "true");
+        method = addPushDownFunction(MONGO, FUNC_GEO_WITHIN, TypeFacility.RUNTIME_NAMES.BOOLEAN, TypeFacility.RUNTIME_NAMES.STRING, TypeFacility.RUNTIME_NAMES.STRING, TypeFacility.RUNTIME_NAMES.DOUBLE+"[][]"); //$NON-NLS-1$ 
+        method.setProperty(AVOID_PROJECTION, "true");
+        if (getVersion().compareTo(MongoDBExecutionFactory.TWO_6) >= 0) {
+            method = addPushDownFunction(MONGO, FUNC_GEO_NEAR, TypeFacility.RUNTIME_NAMES.BOOLEAN, TypeFacility.RUNTIME_NAMES.STRING, TypeFacility.RUNTIME_NAMES.DOUBLE+"[]", TypeFacility.RUNTIME_NAMES.INTEGER, TypeFacility.RUNTIME_NAMES.INTEGER); //$NON-NLS-1$ 
+            method.setProperty(AVOID_PROJECTION, "true");
+            method = addPushDownFunction(MONGO, FUNC_GEO_NEAR_SPHERE, TypeFacility.RUNTIME_NAMES.BOOLEAN, TypeFacility.RUNTIME_NAMES.STRING, TypeFacility.RUNTIME_NAMES.DOUBLE+"[]", TypeFacility.RUNTIME_NAMES.INTEGER, TypeFacility.RUNTIME_NAMES.INTEGER); //$NON-NLS-1$ 
+            method.setProperty(AVOID_PROJECTION, "true");
+        }
+        else {
+            method = addPushDownFunction(MONGO, FUNC_GEO_NEAR, TypeFacility.RUNTIME_NAMES.BOOLEAN, TypeFacility.RUNTIME_NAMES.STRING, TypeFacility.RUNTIME_NAMES.DOUBLE+"[]", TypeFacility.RUNTIME_NAMES.INTEGER); //$NON-NLS-1$ 
+            method.setProperty(AVOID_PROJECTION, "true");
+            method = addPushDownFunction(MONGO, FUNC_GEO_NEAR_SPHERE, TypeFacility.RUNTIME_NAMES.BOOLEAN, TypeFacility.RUNTIME_NAMES.STRING, TypeFacility.RUNTIME_NAMES.DOUBLE+"[]", TypeFacility.RUNTIME_NAMES.INTEGER); //$NON-NLS-1$ 
+            method.setProperty(AVOID_PROJECTION, "true");            
+        }
+        method = addPushDownFunction(MONGO, FUNC_GEO_POLYGON_INTERSECTS, TypeFacility.RUNTIME_NAMES.BOOLEAN, TypeFacility.RUNTIME_NAMES.STRING, TypeFacility.RUNTIME_NAMES.DOUBLE,TypeFacility.RUNTIME_NAMES.DOUBLE,TypeFacility.RUNTIME_NAMES.DOUBLE,TypeFacility.RUNTIME_NAMES.DOUBLE); 
+        method.setProperty(AVOID_PROJECTION, "true");
+        method = addPushDownFunction(MONGO, FUNC_GEO_POLYGON_WITHIN, TypeFacility.RUNTIME_NAMES.BOOLEAN, TypeFacility.RUNTIME_NAMES.STRING, TypeFacility.RUNTIME_NAMES.DOUBLE,TypeFacility.RUNTIME_NAMES.DOUBLE,TypeFacility.RUNTIME_NAMES.DOUBLE,TypeFacility.RUNTIME_NAMES.DOUBLE); 
+        method.setProperty(AVOID_PROJECTION, "true");
+        
+        registerFunctionModifier(FUNC_GEO_NEAR, new AliasModifier("$near"));//$NON-NLS-1$
+        registerFunctionModifier(FUNC_GEO_NEAR_SPHERE, new AliasModifier("$nearSphere"));//$NON-NLS-1$
+        registerFunctionModifier(FUNC_GEO_WITHIN, new AliasModifier("$geoWithin"));//$NON-NLS-1$
+        registerFunctionModifier(FUNC_GEO_INTERSECTS, new AliasModifier("$geoIntersects"));//$NON-NLS-1$
+        registerFunctionModifier(FUNC_GEO_POLYGON_INTERSECTS, new GeoPolygonFunctionModifier("$geoIntersects"));//$NON-NLS-1$
+        registerFunctionModifier(FUNC_GEO_POLYGON_WITHIN, new GeoPolygonFunctionModifier("$geoWithin"));//$NON-NLS-1$
 	}
-
-	@Override
-	public void start() throws TranslatorException {
-		super.start();
+	
+	private static class GeoPolygonFunctionModifier extends FunctionModifier {
+		private String functionName;
+		
+		public GeoPolygonFunctionModifier(String name) {
+			this.functionName = name;
+		}
+		
+		@Override
+		public List<?> translate(Function function) {
+			List<Expression> args = function.getParameters();
+			Expression north = args.get(1);
+			Expression east = args.get(2);
+			Expression west = args.get(3);
+			Expression south = args.get(4);
+			
+			ArrayList<Expression> points = new ArrayList<Expression>();
+			points.add(new org.teiid.language.Array(TypeFacility.RUNTIME_TYPES.DOUBLE, Arrays.asList(west, north)));
+			points.add(new org.teiid.language.Array(TypeFacility.RUNTIME_TYPES.DOUBLE, Arrays.asList(east, north)));
+			points.add(new org.teiid.language.Array(TypeFacility.RUNTIME_TYPES.DOUBLE, Arrays.asList(east, south)));
+			points.add(new org.teiid.language.Array(TypeFacility.RUNTIME_TYPES.DOUBLE, Arrays.asList(west, south)));
+			points.add(new org.teiid.language.Array(TypeFacility.RUNTIME_TYPES.DOUBLE, Arrays.asList(west, north)));
+			
+			Expression coordinates = new org.teiid.language.Array(TypeFacility.RUNTIME_TYPES.DOUBLE,  points);			
+			
+			Function func = LanguageFactory.INSTANCE.createFunction(this.functionName,
+					Arrays.asList(args.get(0), 
+							LanguageFactory.INSTANCE.createLiteral("Polygon", TypeFacility.RUNTIME_TYPES.STRING), //$NON-NLS-1$
+							coordinates
+					),
+                    Boolean.class);
+			return Arrays.asList(func);  
+		}
 	}
 	
     @TranslatorProperty(display="Database Version", description= "Database Version")
@@ -112,6 +205,15 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
 
     Version getVersion() {
         return this.version;
+    }
+    
+    @TranslatorProperty(display="Use Disk", description="Use disk for aggregation processing in MongoDB",advanced=true)
+    public boolean useDisk() {
+        return this.useDisk;
+    }
+
+    public void setUseDisk(boolean useDisk) {
+        this.useDisk = useDisk;
     }
     
     /**
@@ -148,7 +250,7 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
 	public ProcedureExecution createProcedureExecution(Call command, ExecutionContext executionContext, RuntimeMetadata metadata, MongoDBConnection connection) throws TranslatorException {
 		String nativeQuery = command.getMetadataObject().getProperty(SQLStringVisitor.TEIID_NATIVE_QUERY, false);
 		if (nativeQuery != null) {
-			return new MongoDBDirectQueryExecution(command.getArguments(), command, executionContext, metadata, connection, nativeQuery, false);
+			return new MongoDBDirectQueryExecution(command.getArguments(), command, executionContext, metadata, connection, nativeQuery, false, this);
 		}
 		throw new TranslatorException(MongoDBPlugin.Util.gs(MongoDBPlugin.Event.TEIID18011));
 	}
@@ -160,7 +262,7 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
 
 	@Override
 	public ProcedureExecution createDirectExecution(List<Argument> arguments, Command command, ExecutionContext executionContext, RuntimeMetadata metadata, MongoDBConnection connection) throws TranslatorException {
-		return new MongoDBDirectQueryExecution(arguments.subList(1, arguments.size()), command, executionContext, metadata, connection, (String)arguments.get(0).getArgumentValue().getValue(), true);
+		return new MongoDBDirectQueryExecution(arguments.subList(1, arguments.size()), command, executionContext, metadata, connection, (String)arguments.get(0).getArgumentValue().getValue(), true, this);
 	}
 
     @Override
@@ -228,9 +330,14 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
     	return true;
     }
 
+    @TranslatorProperty(display="Supports Count(expr)", description="Supports Aggregate function count with expression", advanced=true)
+    public void setSupportsAggregatesCount(boolean value) {
+        this.supportsAggregatesCount = value;
+    }
+    
     @Override
 	public boolean supportsAggregatesCount() {
-    	return true;
+    	return supportsAggregatesCount;
     }
 
     @Override
@@ -314,8 +421,10 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
 	 * @param field
 	 * @param expectedClass
 	 * @return
+	 * @throws TranslatorException 
 	 */
-	public Object retrieveValue(Object value, Class<?> expectedClass, DB mongoDB, String fqn, String colName) {
+    public Object retrieveValue(Object value, Class<?> expectedClass, DB mongoDB, String fqn, String colName)
+            throws TranslatorException {
 		if (value == null) {
 			return null;
 		}
@@ -323,7 +432,7 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
 		if (value.getClass().equals(expectedClass)) {
 			return value;
 		}
-
+		
 		if (value instanceof DBRef) {
 			Object obj = ((DBRef)value).getId();
 			if (obj instanceof BasicDBObject) {
@@ -349,6 +458,9 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
 		}
 		else if (value instanceof String && expectedClass.equals(Character.class)) {
 			return new Character(((String)value).charAt(0));
+		}
+		else if (value instanceof String && expectedClass.equals(BinaryType.class)) {
+			return new BinaryType(((String)value).getBytes());
 		}
 		else if (value instanceof String && expectedClass.equals(Blob.class)) {
 			GridFS gfs = new GridFS(mongoDB, fqn);
@@ -402,6 +514,20 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
                 value = array;
 		    }
 		}
+		else if (value instanceof org.bson.types.ObjectId) {
+		    org.bson.types.ObjectId id = (org.bson.types.ObjectId) value;
+		    value = id.toStringBabble();
+		}
+		else {
+		    Transform transform = DataTypeManager.getTransform(value.getClass(), expectedClass);
+		    if (transform != null) {
+		        try {
+                    value = transform.transform(value, expectedClass);
+                } catch (TransformationException e) {
+                    throw new TranslatorException(e);
+                }
+		    }
+		}
 		return value;
 	}
 
@@ -435,6 +561,12 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
 			else if (value instanceof java.sql.Timestamp) {
 				return new java.util.Date(((java.sql.Timestamp)value).getTime());
 			}
+			else if (value instanceof BinaryType) {
+				return new Binary(((BinaryType)value).getBytes());
+			}
+			else if (value instanceof byte[]) {
+				return new Binary((byte[])value);
+			}			
 			else if (value instanceof Blob) {
 				String uuid = UUID.randomUUID().toString();
 				GridFS gfs = new GridFS(mongoDB, fqn);
@@ -459,9 +591,24 @@ public class MongoDBExecutionFactory extends ExecutionFactory<ConnectionFactory,
 				gfsFile.save();
 				return uuid;
 			}
+			else if (value instanceof Object[]) {
+			    BasicDBList list = new BasicDBList();
+			    for (Object obj:(Object[])value) {
+			        list.add(obj);
+			    }
+			    return list;
+			}
 			return value;
 		} catch (SQLException e) {
 			throw new TranslatorException(e);
 		}
+	}
+	
+	public AggregationOptions getOptions(int batchSize) {
+	    if (this.version.compareTo(TWO_4) < 0) {
+	        return AggregationOptions.builder().batchSize(batchSize).outputMode(AggregationOptions.OutputMode.INLINE).build();
+	    }
+        return AggregationOptions.builder().batchSize(batchSize).outputMode(AggregationOptions.OutputMode.CURSOR)
+                .allowDiskUse(useDisk()).build();
 	}
 }

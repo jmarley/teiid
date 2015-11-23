@@ -29,6 +29,8 @@ import java.util.Arrays;
 import java.util.List;
 
 import org.junit.Test;
+import org.teiid.core.TeiidComponentException;
+import org.teiid.core.TeiidProcessingException;
 import org.teiid.query.optimizer.TestOptimizer;
 import org.teiid.query.optimizer.TestOptimizer.ComparisonMode;
 import org.teiid.query.optimizer.capabilities.BasicSourceCapabilities;
@@ -370,6 +372,25 @@ public class TestWindowFunctions {
         helpProcess(plan, dataManager, expected);
     }
     
+    @Test public void testViewCriteriaPushdown1() throws Exception {
+    	BasicSourceCapabilities caps = getTypicalCapabilities();
+    	caps.setCapabilitySupport(Capability.ELEMENTARY_OLAP, true);
+        ProcessorPlan plan = TestOptimizer.helpPlan("SELECT * FROM (select e1, e3, count(e1) over (partition by e3 order by e2) as r from pm1.g1) as x where x.e3 = false", //$NON-NLS-1$
+                                      RealMetadataFactory.example1Cached(), null, new DefaultCapabilitiesFinder(caps),
+                                      new String[] {
+                                          "SELECT g_0.e1, g_0.e3, g_0.e2 FROM pm1.g1 AS g_0 WHERE g_0.e3 = FALSE"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
+    
+        FakeDataManager dataManager = new FakeDataManager();
+    	sampleData1(dataManager);
+        List<?>[] expected = new List<?>[] {
+        		Arrays.asList("a", Boolean.FALSE, 2),
+        		Arrays.asList(null, Boolean.FALSE, 2),
+        		Arrays.asList("b", Boolean.FALSE, 3),
+        		Arrays.asList("a", Boolean.FALSE, 2),
+        }; 
+        helpProcess(plan, dataManager, expected);
+    }
+    
     @Test public void testViewLimit() throws Exception {
     	BasicSourceCapabilities caps = getTypicalCapabilities();
     	caps.setCapabilitySupport(Capability.ELEMENTARY_OLAP, true);
@@ -384,6 +405,28 @@ public class TestWindowFunctions {
         		Arrays.asList("a", Boolean.FALSE, 2),
         }; 
         helpProcess(plan, dataManager, expected);
+    }
+    
+    @Test public void testOrderByConstant() throws TeiidComponentException, TeiidProcessingException {
+    	String sql = "select 1 as jiraissue_assignee, "
+    			+ "row_number() over(order by subquerytable.jiraissue_id desc) as calculatedfield1 "
+    			+ "from  pm1.g1 as jiraissue left outer join "
+    			+ "(select jiraissue_sub.e1 as jiraissue_assignee, jiraissue_sub.e1 as jiraissue_id from pm2.g2 jiraissue_sub "
+    			+ "where (jiraissue_sub.e4 between null and 2)"
+    			+ " ) subquerytable on jiraissue.e1 = subquerytable.jiraissue_assignee";
+    	
+    	BasicSourceCapabilities bsc = TestOptimizer.getTypicalCapabilities();
+    	bsc.setCapabilitySupport(Capability.ELEMENTARY_OLAP, true);
+    	bsc.setCapabilitySupport(Capability.QUERY_AGGREGATES_MAX, true);
+    	bsc.setCapabilitySupport(Capability.QUERY_ORDERBY_NULL_ORDERING, true);
+    	bsc.setCapabilitySupport(Capability.WINDOW_FUNCTION_ORDER_BY_AGGREGATES, true);
+    	 
+    	ProcessorPlan plan = TestOptimizer.helpPlan(sql, 
+                RealMetadataFactory.example1Cached(), null, new DefaultCapabilitiesFinder(bsc),
+                new String[] {
+                    "SELECT 1 FROM pm1.g1 AS g_0"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
+
+    	checkNodeTypes(plan, new int[] {1, 1, 1}, new Class<?>[] {AccessNode.class, WindowFunctionProjectNode.class, ProjectNode.class});                                    
     }
     
 }

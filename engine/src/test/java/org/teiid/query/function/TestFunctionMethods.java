@@ -30,20 +30,20 @@ import java.util.TimeZone;
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
+import org.teiid.api.exception.query.FunctionExecutionException;
 import org.teiid.core.util.TimestampWithTimezone;
 import org.teiid.language.SQLConstants.NonReserved;
+import org.teiid.query.processor.TestProcessor;
 import org.teiid.query.unittest.TimestampUtil;
 
 @SuppressWarnings("nls")
 public class TestFunctionMethods {
 	
 	@BeforeClass public static void oneTimeSetup() {
-		TimestampWithTimezone.ISO8601_WEEK = true;
 		TimestampWithTimezone.resetCalendar(TimeZone.getTimeZone("GMT-0600"));
 	}
 	
 	@AfterClass public static void oneTimeTearDown() {
-		TimestampWithTimezone.ISO8601_WEEK = false;
 		TimestampWithTimezone.resetCalendar(null);
 	}
 	
@@ -63,8 +63,8 @@ public class TestFunctionMethods {
 		assertEquals(52, FunctionMethods.week(TimestampUtil.createDate(106, 0, 1)));
 	}
 	
-	@Test public void testIso8601Week2() {
-		assertEquals(1, FunctionMethods.dayOfWeek(TimestampUtil.createDate(111, 10, 28)));
+	@Test public void testDayOfWeek() {
+		assertEquals(2, FunctionMethods.dayOfWeek(TimestampUtil.createDate(111, 10, 28)));
 	}
 	
 	@Test public void testTimestampDiffTimeStamp_ErrorUsingEndDate2304() throws Exception {
@@ -119,5 +119,105 @@ public class TestFunctionMethods {
 				new Timestamp(TimestampUtil.createDate(113, 2, 4).getTime()),
 				new Timestamp(TimestampUtil.createDate(113, 2, 3).getTime()), true));
 	}
-		 
+
+    @Test public void regexpReplaceOkay() throws Exception {
+        assertEquals(
+                "fooXbaz",
+                FunctionMethods.regexpReplace(null, "foobarbaz", "b..", "X")
+        );
+        assertEquals(
+                "fooXX",
+                FunctionMethods.regexpReplace(null, "foobarbaz", "b..", "X", "g")
+        );
+        assertEquals(
+                "fooXarYXazY",
+                FunctionMethods.regexpReplace(null, "foobarbaz", "b(..)", "X$1Y", "g")
+        );
+        assertEquals(
+                "fooBXRbXz",
+                FunctionMethods.regexpReplace(null, "fooBARbaz", "a", "X", "gi")
+        );
+        assertEquals(
+                "xxbye Wxx",
+                FunctionMethods.regexpReplace(TestProcessor.createCommandContext(), "Goodbye World", "[g-o].", "x", "gi")
+        );
+    }
+
+    @Test(expected=FunctionExecutionException.class)
+    public void regexpInvalidFlagsBad() throws Exception {
+        FunctionMethods.regexpReplace(null, "foobarbaz", "b..", "X", "y");
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testAbsIntBounds() throws FunctionExecutionException {
+    	FunctionMethods.abs(Integer.MIN_VALUE);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testAbsLongBounds() throws FunctionExecutionException {
+    	FunctionMethods.abs(Long.MIN_VALUE);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testPlusLongBounds() throws FunctionExecutionException {
+    	FunctionMethods.plus(Long.MIN_VALUE, -1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testPlusLongBounds1() throws FunctionExecutionException {
+    	FunctionMethods.plus(Long.MAX_VALUE, 1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testPlusIntBounds() throws FunctionExecutionException {
+    	FunctionMethods.plus(Integer.MIN_VALUE, -1);
+    }
+        
+    @Test(expected=FunctionExecutionException.class) public void testPlusIntBounds1() throws FunctionExecutionException {
+    	FunctionMethods.plus(Integer.MAX_VALUE, 1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testMinusIntBounds1() throws FunctionExecutionException {
+    	FunctionMethods.minus(Integer.MAX_VALUE, -1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testMinusLongBounds() throws FunctionExecutionException {
+    	FunctionMethods.minus(Long.MIN_VALUE, 1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testMinusLongBounds1() throws FunctionExecutionException {
+    	FunctionMethods.minus(Long.MAX_VALUE, -1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testMinusIntBounds() throws FunctionExecutionException {
+    	FunctionMethods.minus(Integer.MIN_VALUE, 1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testDivideIntBounds() throws FunctionExecutionException {
+    	FunctionMethods.divide(Integer.MIN_VALUE, -1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testDivedLongBounds() throws FunctionExecutionException {
+    	FunctionMethods.divide(Long.MIN_VALUE, -1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testMultLongBounds() throws FunctionExecutionException {
+    	FunctionMethods.multiply(Long.MIN_VALUE, -1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testMultLongBounds1() throws FunctionExecutionException {
+    	FunctionMethods.multiply(Long.MAX_VALUE, 2);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testMultLongBounds2() throws FunctionExecutionException {
+    	FunctionMethods.multiply(Long.MIN_VALUE, -2);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testMultIntBounds() throws FunctionExecutionException {
+    	FunctionMethods.multiply(Integer.MIN_VALUE, -1);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testMultIntBounds1() throws FunctionExecutionException {
+    	FunctionMethods.multiply(Integer.MAX_VALUE, 2);
+    }
+    
+    @Test(expected=FunctionExecutionException.class) public void testMultIntBounds2() throws FunctionExecutionException {
+    	FunctionMethods.multiply(Integer.MIN_VALUE, -2);
+    }
+    
 }

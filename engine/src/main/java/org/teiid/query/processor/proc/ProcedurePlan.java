@@ -93,6 +93,8 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
 		IndexedTupleSource ts;
 		List<?> currentRow;
 		TupleBuffer resultsBuffer;
+		public boolean returning;
+		public boolean usesLocalTemp;
 	}
 	
 	static final ElementSymbol ROWCOUNT =
@@ -179,7 +181,11 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
         	super.getContext().setVariableContext(parentContext);
         }
         createVariableContext();
-        
+        CommandContext cc = super.getContext();
+        if (cc != null) {
+        	//create fresh local state
+        	setContext(cc.clone());
+        }
         done = false;
         currentState = null;
         finalTupleSource = null;
@@ -208,12 +214,16 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
 		            Expression expr = entry.getValue();
 		            
 		            VariableContext context = getCurrentVariableContext();
+		            if (context.getVariableMap().containsKey(param)) {
+		            	continue;
+		            }
 		            Object value = this.evaluateExpression(expr);
 		
 		            //check constraint
 		            checkNotNull(param, value);
 		            setParameterValue(param, context, value);
 		        }
+		        this.evaluator.close();
     		} else if (runInContext) {
     			//if there are no params, this needs to run in the current variable context
             	this.currentVarContext.setParentContext(parentContext);
@@ -229,16 +239,17 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
 		if (metadata.elementSupports(param.getMetadataID(), SupportConstants.Element.NULL)) {
 			return;
 		}
-		if (value == null) {
-		     throw new QueryValidatorException(QueryPlugin.Event.TEIID30164, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30164, param));
-		}
-		if (value instanceof ArrayImpl && metadata.isVariadic(param.getMetadataID())) {
-			ArrayImpl av = (ArrayImpl)value;
-			for (Object o : av.getValues()) {
-				if (o == null) {
-				     throw new QueryValidatorException(QueryPlugin.Event.TEIID30164, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30164, param));
+		if (metadata.isVariadic(param.getMetadataID())) {
+			if (value instanceof ArrayImpl) {
+				ArrayImpl av = (ArrayImpl)value;
+				for (Object o : av.getValues()) {
+					if (o == null) {
+					     throw new QueryValidatorException(QueryPlugin.Event.TEIID30164, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30164, param));
+					}
 				}
 			}
+		} else if (value == null) {
+			throw new QueryValidatorException(QueryPlugin.Event.TEIID30164, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30164, param));
 		}
 	}
 
@@ -336,6 +347,24 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
             inst = program.getCurrentInstruction();
 	        if (inst == null){
 	        	LogManager.logTrace(org.teiid.logging.LogConstants.CTX_DQP, "Finished program", program); //$NON-NLS-1$
+        		//look ahead to see if we need to process in place
+        		VariableContext vc = this.cursorStates.getParentContext();
+        		CursorState last = (CursorState) this.cursorStates.getValue(null);
+                if(last != null){
+                	if (last.resultsBuffer == null && (last.usesLocalTemp || !txnTupleSources.isEmpty())) {
+                		last.resultsBuffer = bufferMgr.createTupleBuffer(last.processor.getOutputElements(), getContext().getConnectionId(), TupleSourceType.PROCESSOR);
+                		last.returning = true;
+                	}
+                	if (last.returning) {
+	                	while (last.ts.hasNext()) {
+	                		List<?> tuple = last.ts.nextTuple();
+	                		last.resultsBuffer.addTuple(tuple);
+	                	}
+	                	last.resultsBuffer.close();
+	                	last.ts = last.resultsBuffer.createIndexedTupleSource(true);
+	                	last.returning = false;
+                	}
+                }
                 this.pop(true);
                 continue;
             }
@@ -354,6 +383,7 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
 	            } else {
 	            	LogManager.logTrace(org.teiid.logging.LogConstants.CTX_DQP, "Executing instruction", inst); //$NON-NLS-1$
 	                inst.process(this);
+	                this.evaluator.close();
 	            }
 	        } catch (RuntimeException e) {
 	        	throw e;
@@ -533,7 +563,17 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
 		return this.currentVarContext;
     }
 
-    public void executePlan(ProcessorPlan command, String rsName, Map<ElementSymbol, ElementSymbol> procAssignments, CreateCursorResultSetInstruction.Mode mode)
+    /**
+     * 
+     * @param command
+     * @param rsName
+     * @param procAssignments
+     * @param mode
+     * @param usesLocalTemp - only matters in HOLD mode
+     * @throws TeiidComponentException
+     * @throws TeiidProcessingException
+     */
+    public void executePlan(ProcessorPlan command, String rsName, Map<ElementSymbol, ElementSymbol> procAssignments, CreateCursorResultSetInstruction.Mode mode, boolean usesLocalTemp)
         throws TeiidComponentException, TeiidProcessingException {
     	
         CursorState state = (CursorState) this.cursorStates.getValue(rsName);
@@ -550,6 +590,7 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
 		        CommandContext subContext = getContext().clone();
 		        subContext.setVariableContext(this.currentVarContext);
 		        state = new CursorState();
+		        state.usesLocalTemp = usesLocalTemp;
 		        state.processor = new QueryProcessor(command, subContext, this.bufferMgr, this);
 		        state.ts = new BatchIterator(state.processor);
 		        if (mode == Mode.HOLD && procAssignments != null && state.processor.getOutputElements().size() - procAssignments.size() > 0) {
@@ -630,14 +671,16 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
      * @throws XATransactionException 
      */
     public void pop(boolean success) throws TeiidComponentException {
+    	this.evaluator.close();
     	Program program = this.programs.pop();
     	VariableContext vc = this.currentVarContext;
     	VariableContext cs = this.cursorStates;
     	try {
         	this.currentVarContext = this.currentVarContext.getParentContext();
         	this.cursorStates = this.cursorStates.getParentContext();
-	    	program.getTempTableStore().removeTempTables();
-	    	this.getContext().setTempTableStore(getTempTableStore());
+        	TempTableStore tempTableStore = program.getTempTableStore();
+			this.getContext().setTempTableStore(tempTableStore.getParentTempTableStore());
+        	tempTableStore.removeTempTables();
 			if (program.startedTxn()) {
 	    		TransactionService ts = this.getContext().getTransactionServer();
 	    		TransactionContext tc = this.blockContext;
@@ -672,6 +715,7 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
 	}
     
     public void push(Program program) throws XATransactionException {
+    	this.evaluator.close();
     	program.reset(this.getContext().getConnectionId());
 		program.setTrappingExceptions(program.getExceptionGroup() != null || (!this.programs.isEmpty() && this.programs.peek().isTrappingExceptions()));
     	TempTableStore tts = getTempTableStore();
@@ -784,7 +828,7 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
      */
     public TempTableStore getTempTableStore() {
     	if (this.programs.isEmpty()) {
-    		if (runInContext) {
+    		if (runInContext && params == null) {
     			return getContext().getTempTableStore();
     		}
     		return null;
@@ -794,16 +838,12 @@ public class ProcedurePlan extends ProcessorPlan implements ProcessorDataManager
 
     boolean evaluateCriteria(Criteria condition) throws BlockedException, TeiidProcessingException, TeiidComponentException {
     	evaluator.initialize(getContext(), getDataManager());
-		boolean result = evaluator.evaluate(condition, Collections.emptyList());
-		this.evaluator.close();
-		return result;
+		return evaluator.evaluate(condition, Collections.emptyList());
     }
     
     Object evaluateExpression(Expression expression) throws BlockedException, TeiidProcessingException, TeiidComponentException {
     	evaluator.initialize(getContext(), getDataManager());
-    	Object result = evaluator.evaluate(expression, Collections.emptyList());
-    	this.evaluator.close();
-    	return result;
+    	return evaluator.evaluate(expression, Collections.emptyList());
     }
                
     public Program peek() {

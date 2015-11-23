@@ -32,6 +32,8 @@ enum Element {
 
     // VM wide elements
     ASYNC_THREAD_POOL_ELEMENT("async-thread-pool", "async-thread-pool"),
+    THREAD_COUNT_ATTRIBUTE("max-thread-count", "async-thread-pool-max-thread-count"),
+    
     ALLOW_ENV_FUNCTION_ELEMENT("allow-env-function", "allow-env-function"),
             	
 	MAX_THREADS_ELEMENT("max-threads", "max-threads"),
@@ -50,7 +52,9 @@ enum Element {
     WORKMANAGER("workmanager", "workmanager"),
     
     POLICY_DECIDER_MODULE_ELEMENT("policy-decider-module", "policy-decider-module"),
+    DATA_ROLES_REQUIRED_ELEMENT("data-roles-required", "data-roles-required"),
     AUTHORIZATION_VALIDATOR_MODULE_ELEMENT("authorization-validator-module", "authorization-validator-module"),
+    PREPARSER_MODULE_ELEMENT("preparser-module", "preparser-module"),
 	
 	// buffer manager
 	BUFFER_SERVICE_ELEMENT("buffer-service"),
@@ -124,7 +128,8 @@ enum Element {
 	// Translator
     TRANSLATOR_ELEMENT("translator"),
     TRANSLATOR_NAME_ATTRIBUTE("name", "name"),
-    TRANSLATOR_MODULE_ATTRIBUTE("module", "module");
+    TRANSLATOR_MODULE_ATTRIBUTE("module", "module"),
+    TRANSLATOR_SLOT_ATTRIBUTE("slot", "slot");
     
     private final String xmlName;
     private final String modelName;

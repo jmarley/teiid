@@ -48,6 +48,10 @@ public class MaterializationMetadataRepository extends MetadataRepository {
 	public static final String MATVIEW_SHARE_SCOPE = "{http://www.teiid.org/ext/relational/2012}MATVIEW_SHARE_SCOPE"; //$NON-NLS-1$
 	public static final String MATVIEW_ONERROR_ACTION = "{http://www.teiid.org/ext/relational/2012}MATVIEW_ONERROR_ACTION"; //$NON-NLS-1$
 	
+	public static final String MATVIEW_UPDATABLE = "{http://www.teiid.org/ext/relational/2012}MATVIEW_UPDATABLE"; //$NON-NLS-1$
+	public static final String MATVIEW_PREFER_MEMORY = "{http://www.teiid.org/ext/relational/2012}MATVIEW_PREFER_MEMORY"; //$NON-NLS-1$
+	public static final String MATVIEW_SCOPE = "{http://www.teiid.org/ext/relational/2012}MATVIEW_SCOPE"; //$NON-NLS-1$
+	
 	public enum LoadStates {NEEDS_LOADING, LOADING, LOADED, FAILED_LOAD};
 	public enum Scope {NONE, VDB, SCHEMA};
 	public enum ErrorAction {THROW_EXCEPTION, IGNORE, WAIT}
@@ -71,11 +75,11 @@ public class MaterializationMetadataRepository extends MetadataRepository {
 					String loadScript = table.getProperty(MATVIEW_LOAD_SCRIPT, false);
 					
 					if (statusTable == null || (stageTable == null && loadScript == null)) {
-						throw new TranslatorException(QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31144));
+						throw new TranslatorException(QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31154));
 					}
 					
 					if (beforeScript == null || afterScript == null) {
-						LogManager.logWarning(LogConstants.CTX_MATVIEWS, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31144));
+						LogManager.logWarning(LogConstants.CTX_MATVIEWS, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31155));
 					}
 					
 				}

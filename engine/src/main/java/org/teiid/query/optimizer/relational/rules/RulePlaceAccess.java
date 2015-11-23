@@ -25,6 +25,7 @@ package org.teiid.query.optimizer.relational.rules;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -66,7 +67,7 @@ public final class RulePlaceAccess implements
                                   OptimizerRule {
 
     public static final String CONFORMED_SOURCES = AbstractMetadataRecord.RELATIONAL_URI + "conformed-sources"; //$NON-NLS-1$
-	private static final String RECONTEXT_STRING = "__"; //$NON-NLS-1$
+	public static final String RECONTEXT_STRING = "__"; //$NON-NLS-1$
 
     public PlanNode execute(PlanNode plan,
                             QueryMetadataInterface metadata,
@@ -143,9 +144,13 @@ public final class RulePlaceAccess implements
                 accessNode.setProperty(NodeConstants.Info.IS_OPTIONAL, hint);
             }
             
-            Object modelId = sourceNode.removeProperty(NodeConstants.Info.MODEL_ID);
-            if (modelId != null) {
-                accessNode.setProperty(NodeConstants.Info.MODEL_ID, modelId);
+            Object modelId = null;
+            if (sourceNode.getGroups().size() == 1) {
+            	GroupSymbol gs = sourceNode.getGroups().iterator().next();
+            	modelId = gs.getModelMetadataId();
+            	if (modelId != null) {
+            		accessNode.setProperty(NodeConstants.Info.MODEL_ID, modelId);
+            	}
             }
             if (req instanceof Create || req instanceof Drop) {
             	modelId = TempMetadataAdapter.TEMP_MODEL;
@@ -166,7 +171,7 @@ public final class RulePlaceAccess implements
             	Object gid = group.getMetadataID();
             	String sources = metadata.getExtensionProperty(gid, CONFORMED_SOURCES, false); 
             	if (sources != null) {
-            		Set<Object> conformed = new HashSet<Object>();
+            		Set<Object> conformed = new LinkedHashSet<Object>();
             		conformed.add(modelId);
             		for (String source : StringUtil.split(sources, ",")) { //$NON-NLS-1$
             			Object mid = metadata.getModelID(source.trim());
@@ -277,11 +282,11 @@ public final class RulePlaceAccess implements
      * Creates a uniquely named group symbol given the old symbol
      * 
      * @param oldSymbol
-     * @param allUpperNames a set of all known groups in upper case
+     * @param names a case insensitive set of all known groups
      * @return
      */
     public static GroupSymbol recontextSymbol(GroupSymbol oldSymbol,
-                                              Set<String> allUpperNames) {
+                                              Set<String> names) {
         // Create new unique name
         String oldName = oldSymbol.getName();
         int dotIndex = oldName.lastIndexOf("."); //$NON-NLS-1$
@@ -305,7 +310,7 @@ public final class RulePlaceAccess implements
         String newName = null;
         do {
             newName = oldName + RECONTEXT_STRING + recontextNumber++;
-        } while (!allUpperNames.add(newName.toUpperCase()));
+        } while (!names.add(newName));
 
         // Determine the definition
         String newDefinition = null;

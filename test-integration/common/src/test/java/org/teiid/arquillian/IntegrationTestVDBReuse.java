@@ -34,7 +34,7 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.teiid.adminapi.Admin;
 import org.teiid.adminapi.AdminException;
-import org.teiid.adminapi.AdminFactory;
+import org.teiid.adminapi.jboss.AdminFactory;
 import org.teiid.core.util.UnitTestUtil;
 import org.teiid.jdbc.AbstractMMQueryTestCase;
 import org.teiid.jdbc.TeiidDriver;
@@ -47,7 +47,7 @@ public class IntegrationTestVDBReuse extends AbstractMMQueryTestCase {
 	
 	@Before
 	public void setup() throws Exception {
-		admin = AdminFactory.getInstance().createAdmin("localhost", 9999,	"admin", "admin".toCharArray());
+		admin = AdminFactory.getInstance().createAdmin("localhost", 9990,	"admin", "admin".toCharArray());
 	}
 	
 	@After
@@ -92,6 +92,19 @@ public class IntegrationTestVDBReuse extends AbstractMMQueryTestCase {
 		this.internalConnection =  TeiidDriver.getInstance().connect("jdbc:teiid:reuse1@mm://localhost:31000;user=user;password=user", null);
 		
 		execute("SELECT * FROM Stock2"); //$NON-NLS-1$
+		
+		//redeploy
+		admin.deploy("dynamicview-vdb.xml",new FileInputStream(UnitTestUtil.getTestDataFile("dynamicview-vdb.xml")));
+		assertTrue(AdminUtil.waitForVDBLoad(admin, "dynamic", 1, 3));
+		
+		//ensure we are up
+		this.internalConnection =  TeiidDriver.getInstance().connect("jdbc:teiid:dynamic@mm://localhost:31000;user=user;password=user", null);
+		execute("SELECT * FROM Stock"); //$NON-NLS-1$
+		
+		//ensure the importinv vdb came back up
+		this.internalConnection =  TeiidDriver.getInstance().connect("jdbc:teiid:reuse@mm://localhost:31000;user=user;password=user", null);
+		
+		execute("SELECT count(*) FROM Sys.Columns"); //$NON-NLS-1$
     }
 
 }

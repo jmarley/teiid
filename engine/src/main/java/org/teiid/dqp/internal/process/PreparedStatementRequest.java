@@ -89,7 +89,11 @@ public class PreparedStatementRequest extends Request {
      */
 	@Override
     protected void generatePlan(boolean addLimit) throws TeiidComponentException, TeiidProcessingException {
+		createCommandContext();
     	String sqlQuery = requestMsg.getCommands()[0];
+    	if (this.preParser != null) {
+    		sqlQuery = this.preParser.preParse(sqlQuery, this.context);
+    	}
     	CacheID id = new CacheID(this.workContext, Request.createParseInfo(this.requestMsg), sqlQuery);
         prepPlan = prepPlanCache.get(id);
         
@@ -188,7 +192,8 @@ public class PreparedStatementRequest extends Request {
 				}
 				for (int i = 0; i < values.size(); i++) {
 					List<Object> multiValue = multiValues.get(i);
-					multiValue.add(values.get(i));
+					Object value = this.context.getVariableContext().getGlobalValue(this.prepPlan.getReferences().get(i).getContextSymbol());
+					multiValue.add(value);
 				}
 			} else { //just accumulate copies of the command/plan - clones are not necessary
 				if (command == null) {

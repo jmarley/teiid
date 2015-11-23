@@ -134,6 +134,10 @@ public class SQLConstants {
 		public static final String JSONOBJECT = "JSONOBJECT"; //$NON-NLS-1$
 		
 		public static final String AUTO_INCREMENT = "AUTO_INCREMENT"; //$NON-NLS-1$
+		
+		public static final String PRESERVE = "PRESERVE"; //$NON-NLS-1$
+		
+		public static final String GEOMETRY = "GEOMETRY"; //$NON-NLS-1$
 	}
 	
 	public interface Reserved {
@@ -148,6 +152,7 @@ public class SQLConstants {
 	    public static final String LONG = "LONG"; //$NON-NLS-1$
 	    public static final String LOOP = "LOOP"; //$NON-NLS-1$
 	    public static final String MAKEDEP = "MAKEDEP"; //$NON-NLS-1$
+	    public static final String MAKEIND = "MAKEIND"; //$NON-NLS-1$
 	    public static final String MAKENOTDEP = "MAKENOTDEP"; //$NON-NLS-1$
 		public static final String NOCACHE = "NOCACHE"; //$NON-NLS-1$
 		public static final String STRING = "STRING"; //$NON-NLS-1$

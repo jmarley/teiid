@@ -26,6 +26,7 @@ import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.Comparator;
 
 import org.teiid.core.types.DataTypeManager;
 import org.teiid.metadata.FunctionMethod;
@@ -36,6 +37,7 @@ import org.teiid.metadata.MetadataFactory;
 import org.teiid.query.QueryPlugin;
 import org.teiid.query.function.FunctionLibrary;
 import org.teiid.query.function.FunctionMethods;
+import org.teiid.query.function.GeometryFunctionMethods;
 import org.teiid.query.function.JSONFunctionMethods;
 import org.teiid.query.function.SystemFunctionMethods;
 import org.teiid.query.function.TeiidFunction;
@@ -197,13 +199,23 @@ public class SystemSource extends UDFSource implements FunctionCategoryConstants
         addArrayGet();
         addArrayLength();
         addTrimFunction();
+
         addFunctions(JSONFunctionMethods.class);
+        addFunctions(GeometryFunctionMethods.class);
         addFunctions(SystemFunctionMethods.class);
         addFunctions(FunctionMethods.class);
+        addFunctions(XMLSystemFunctions.class);
     }
     
     private void addFunctions(Class<?> clazz) {
 		Method[] methods = clazz.getMethods();
+		//need a consistent order for tests
+		Arrays.sort(methods, new Comparator<Method>() {
+			@Override
+			public int compare(Method arg0, Method arg1) {
+				return arg0.toGenericString().compareTo(arg1.toGenericString());
+			}
+		});
 		for (Method method : methods) {
 			TeiidFunction f = method.getAnnotation(TeiidFunction.class);
 			if (f == null) {
@@ -213,19 +225,29 @@ public class SystemSource extends UDFSource implements FunctionCategoryConstants
 			if (name.isEmpty()) {
 				name = method.getName();
 			}
-			FunctionMethod func = MetadataFactory.createFunctionFromMethod(name, method);
-			func.setDescription(QueryPlugin.Util.getString("SystemSource." + name + "_description")); //$NON-NLS-1$ //$NON-NLS-2$
-			func.setCategory(f.category());
-			for (int i = 0; i < func.getInputParameterCount(); i++) {
-				func.getInputParameters().get(i).setDescription("SystemSource." + name + "_param" + (i+1)); //$NON-NLS-1$ //$NON-NLS-2$
+			addFunction(method, f, name);
+			if (!f.alias().isEmpty()) {
+				addFunction(method, f, f.alias());
 			}
-			func.getOutputParameter().setDescription("SystemSource." + name + "_result"); //$NON-NLS-1$ //$NON-NLS-2$
-			if (f.nullOnNull()) {
-				func.setNullOnNull(true);
-			}
-			func.setDeterminism(f.determinism());
-			functions.add(func);
 		}
+	}
+
+	private FunctionMethod addFunction(Method method, TeiidFunction f,
+			String name) {
+		FunctionMethod func = MetadataFactory.createFunctionFromMethod(name, method);
+		func.setDescription(QueryPlugin.Util.getString(QueryPlugin.Util.getString("SystemSource." + name.toLowerCase() + "_description"))); //$NON-NLS-1$ //$NON-NLS-2$
+		func.setCategory(f.category());
+		for (int i = 0; i < func.getInputParameterCount(); i++) {
+			func.getInputParameters().get(i).setDescription(QueryPlugin.Util.getString("SystemSource." + name.toLowerCase() + "_param" + (i+1))); //$NON-NLS-1$ //$NON-NLS-2$
+		}
+		func.getOutputParameter().setDescription(QueryPlugin.Util.getString("SystemSource." + name.toLowerCase() + "_result")); //$NON-NLS-1$ //$NON-NLS-2$
+		if (f.nullOnNull()) {
+			func.setNullOnNull(true);
+		}
+		func.setDeterminism(f.determinism());
+		func.setPushdown(f.pushdown());
+		functions.add(func);
+		return func;
 	}
     
     private void addTrimFunction() {
@@ -1025,7 +1047,7 @@ public class SystemSource extends UDFSource implements FunctionCategoryConstants
     private void addXmlComment() {
         functions.add(new FunctionMethod(SourceSystemFunctions.XMLCOMMENT, QueryPlugin.Util.getString("SystemSource.xmlcomment_description"), XML, XML_FUNCTION_CLASS, "xmlComment", //$NON-NLS-1$ //$NON-NLS-2$  
                             new FunctionParameter[] { 
-                                new FunctionParameter("value", DataTypeManager.DefaultDataTypes.STRING, QueryPlugin.Util.getString("SystemSource.xmlcomment_param2"))}, //$NON-NLS-1$ //$NON-NLS-2$ 
+                                new FunctionParameter("value", DataTypeManager.DefaultDataTypes.STRING, QueryPlugin.Util.getString("SystemSource.xmlcomment_param1"))}, //$NON-NLS-1$ //$NON-NLS-2$ 
                             new FunctionParameter("result", DataTypeManager.DefaultDataTypes.XML, QueryPlugin.Util.getString("SystemSource.xmlcomment_result")) ) );       //$NON-NLS-1$ //$NON-NLS-2$
     }
 

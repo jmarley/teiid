@@ -81,6 +81,7 @@ public class TeiidProducer implements ODataProducer {
 
 	@Override
 	public EntitiesResponse getNavProperty(ODataContext context, String entitySetName, OEntityKey entityKey, String navProp, final QueryInfo queryInfo) {
+		checkExpand(queryInfo);
 		getEntitySet(entitySetName); // validate entity
 		ODataSQLBuilder visitor = new ODataSQLBuilder(this.client.getMetadataStore(), true);
 		Query query = visitor.selectString(entitySetName, queryInfo, entityKey, navProp, false);
@@ -110,6 +111,12 @@ public class TeiidProducer implements ODataProducer {
 		};
 	}
 
+	private void checkExpand(QueryInfo queryInfo) {
+		if (queryInfo != null && queryInfo.expand != null && !queryInfo.expand.isEmpty()) {
+			throw new UnsupportedOperationException("Expand is not supported"); //$NON-NLS-1$
+		}
+	}
+
 	private EdmEntitySet getEntitySet(String entitySetName) {
 		EdmDataServices eds = getMetadata();
 		EdmEntitySet entity =  eds.findEdmEntitySet(entitySetName);
@@ -130,14 +137,13 @@ public class TeiidProducer implements ODataProducer {
 
 	@Override
 	public EntityResponse getEntity(ODataContext context, String entitySetName, OEntityKey entityKey, EntityQueryInfo queryInfo) {
-		getEntitySet(entitySetName); // validate entity
+		EdmEntitySet entitySet = getEntitySet(entitySetName); // validate entity
 		ODataSQLBuilder visitor = new ODataSQLBuilder(this.client.getMetadataStore(), true);
 		Query query = visitor.selectString(entitySetName, queryInfo, entityKey, null, false);
-		EdmEntitySet entitySet = getEntitySet(visitor.getEntityTable().getFullName());
 		List<SQLParam> parameters = visitor.getParameters();
 		List<OEntity> entityList =  this.client.executeSQL(query, parameters, entitySet, visitor.getProjectedColumns(), null);
 		if (entityList.isEmpty()) {
-			return null;
+			throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16018, entityKey, entitySetName));
 		}
 		return Responses.entity(entityList.get(0));
 	}
@@ -191,7 +197,8 @@ public class TeiidProducer implements ODataProducer {
 		List<SQLParam> parameters = visitor.getParameters();
 		UpdateResponse response =  this.client.executeUpdate(query, parameters);
 		if (response.getUpdateCount() == 0) {
-			LogManager.log(MessageLevel.INFO, LogConstants.CTX_ODATA, null, "no entity to delete in = ", entitySetName, " with key=", entityKey.toString()); //$NON-NLS-1$ //$NON-NLS-2$
+			LogManager.log(MessageLevel.DETAIL, LogConstants.CTX_ODATA, null, "no entity to delete in = ", entitySetName, " with key=", entityKey.toString()); //$NON-NLS-1$ //$NON-NLS-2$
+			throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16018, entityKey, entitySetName));
 		} else if (response.getUpdateCount() == 1) {
 			LogManager.log(MessageLevel.DETAIL, LogConstants.CTX_ODATA, null, "deleted entity = ", entitySetName, " with key=", entityKey.toString()); //$NON-NLS-1$ //$NON-NLS-2$
 		} else {
@@ -213,6 +220,10 @@ public class TeiidProducer implements ODataProducer {
 		int updateCount = update(entitySetName, entity);
 		if (updateCount > 0) {
 			LogManager.log(MessageLevel.DETAIL, LogConstants.CTX_ODATA, null, "updated entity = ", entitySetName, " with key=", entity.getEntityKey().toString()); //$NON-NLS-1$ //$NON-NLS-2$
+		} 
+		else {
+		    LogManager.log(MessageLevel.DETAIL, LogConstants.CTX_ODATA, null, "no entity to update in = ", entitySetName, " with key=", entity.getEntityKey().toString()); //$NON-NLS-1$ //$NON-NLS-2$		    
+		    throw new NotFoundException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16018, entity.getEntityKey(), entitySetName));
 		}
 	}
 
@@ -263,6 +274,7 @@ public class TeiidProducer implements ODataProducer {
 	public BaseResponse callFunction(ODataContext context,
 			EdmFunctionImport function, Map<String, OFunctionParameter> params,
 			QueryInfo queryInfo) {
+		checkExpand(queryInfo);
 		EdmEntityContainer eec = findEntityContainer(function);
 		StringBuilder sql = new StringBuilder();
 		// fully qualify the procedure name

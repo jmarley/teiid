@@ -22,8 +22,12 @@
 
 package org.teiid.translator.jdbc.postgresql;
 
+import java.io.ByteArrayInputStream;
+import java.io.InputStream;
 import java.sql.Connection;
 import java.sql.Date;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Time;
@@ -32,28 +36,23 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import org.teiid.language.AggregateFunction;
-import org.teiid.language.Expression;
-import org.teiid.language.Function;
-import org.teiid.language.LanguageObject;
-import org.teiid.language.Like;
+import org.teiid.GeometryInputSource;
+import org.teiid.core.types.DataTypeManager;
+import org.teiid.language.*;
 import org.teiid.language.Like.MatchMode;
-import org.teiid.language.Limit;
-import org.teiid.language.Literal;
 import org.teiid.language.SQLConstants.NonReserved;
+import org.teiid.logging.LogConstants;
+import org.teiid.logging.LogManager;
+import org.teiid.metadata.Column;
+import org.teiid.metadata.MetadataFactory;
 import org.teiid.translator.ExecutionContext;
+import org.teiid.translator.MetadataProcessor;
 import org.teiid.translator.SourceSystemFunctions;
 import org.teiid.translator.Translator;
 import org.teiid.translator.TranslatorException;
+import org.teiid.translator.TranslatorProperty;
 import org.teiid.translator.TypeFacility;
-import org.teiid.translator.jdbc.AliasModifier;
-import org.teiid.translator.jdbc.ConvertModifier;
-import org.teiid.translator.jdbc.EscapeSyntaxModifier;
-import org.teiid.translator.jdbc.ExtractFunctionModifier;
-import org.teiid.translator.jdbc.FunctionModifier;
-import org.teiid.translator.jdbc.JDBCExecutionFactory;
-import org.teiid.translator.jdbc.ModFunctionModifier;
-import org.teiid.translator.jdbc.Version;
+import org.teiid.translator.jdbc.*;
 import org.teiid.translator.jdbc.oracle.LeftOrRightFunctionModifier;
 import org.teiid.translator.jdbc.oracle.MonthOrDayNameFunctionModifier;
 import org.teiid.translator.jdbc.oracle.OracleFormatFunctionModifier;
@@ -67,6 +66,16 @@ import org.teiid.translator.jdbc.oracle.OracleFormatFunctionModifier;
 @Translator(name="postgresql", description="A translator for postgreSQL Database")
 public class PostgreSQLExecutionFactory extends JDBCExecutionFactory {
 	
+	private static final String INTEGER_TYPE = "integer"; //$NON-NLS-1$
+
+	private static final class NonIntegralNumberToBoolean extends
+			FunctionModifier {
+		@Override
+		public List<?> translate(Function function) {
+			return Arrays.asList(function.getParameters().get(0), " <> 0"); //$NON-NLS-1$
+		}
+	}
+
 	private static final class PostgreSQLFormatFunctionModifier extends
 			OracleFormatFunctionModifier {
 		private PostgreSQLFormatFunctionModifier(String prefix) {
@@ -94,6 +103,15 @@ public class PostgreSQLExecutionFactory extends JDBCExecutionFactory {
 	public static final Version EIGHT_4 = Version.getVersion("8.4"); //$NON-NLS-1$
 	public static final Version NINE_0 = Version.getVersion("9.0"); //$NON-NLS-1$
 	private OracleFormatFunctionModifier formatModifier = new PostgreSQLFormatFunctionModifier("TO_TIMESTAMP("); //$NON-NLS-1$
+	
+	//postgis versions
+	public static final Version ONE_3 = Version.getVersion("1.3"); //$NON-NLS-1$
+	public static final Version ONE_4 = Version.getVersion("1.4"); //$NON-NLS-1$
+	public static final Version ONE_5 = Version.getVersion("1.5"); //$NON-NLS-1$
+	public static final Version TWO_0 = Version.getVersion("2.0"); //$NON-NLS-1$
+	
+	private Version postGisVersion = Version.DEFAULT_VERSION;
+	private boolean projSupported = false;
     
 	public PostgreSQLExecutionFactory() {
 		setMaxDependentInPredicates(1);
@@ -115,23 +133,21 @@ public class PostgreSQLExecutionFactory extends JDBCExecutionFactory {
         registerFunctionModifier(SourceSystemFunctions.CHAR, new AliasModifier("chr")); //$NON-NLS-1$ 
         registerFunctionModifier(SourceSystemFunctions.CONCAT, new AliasModifier("||")); //$NON-NLS-1$ 
         registerFunctionModifier(SourceSystemFunctions.LCASE, new AliasModifier("lower")); //$NON-NLS-1$ 
-        registerFunctionModifier(SourceSystemFunctions.LEFT, new LeftOrRightFunctionModifier(getLanguageFactory()));
-        registerFunctionModifier(SourceSystemFunctions.RIGHT, new LeftOrRightFunctionModifier(getLanguageFactory()));
         registerFunctionModifier(SourceSystemFunctions.SUBSTRING, new AliasModifier("substr")); //$NON-NLS-1$ 
         registerFunctionModifier(SourceSystemFunctions.UCASE, new AliasModifier("upper")); //$NON-NLS-1$ 
         
         registerFunctionModifier(SourceSystemFunctions.DAYNAME, new MonthOrDayNameFunctionModifier(getLanguageFactory(), "Day"));//$NON-NLS-1$ 
-        registerFunctionModifier(SourceSystemFunctions.DAYOFWEEK, new ExtractFunctionModifier()); 
-        registerFunctionModifier(SourceSystemFunctions.DAYOFMONTH, new ExtractFunctionModifier()); 
-        registerFunctionModifier(SourceSystemFunctions.DAYOFYEAR, new ExtractFunctionModifier()); 
-        registerFunctionModifier(SourceSystemFunctions.HOUR, new ExtractFunctionModifier()); 
-        registerFunctionModifier(SourceSystemFunctions.MINUTE, new ExtractFunctionModifier()); 
-        registerFunctionModifier(SourceSystemFunctions.MONTH, new ExtractFunctionModifier()); 
+        registerFunctionModifier(SourceSystemFunctions.DAYOFWEEK, new ExtractFunctionModifier(INTEGER_TYPE)); 
+        registerFunctionModifier(SourceSystemFunctions.DAYOFMONTH, new ExtractFunctionModifier(INTEGER_TYPE)); 
+        registerFunctionModifier(SourceSystemFunctions.DAYOFYEAR, new ExtractFunctionModifier(INTEGER_TYPE)); 
+        registerFunctionModifier(SourceSystemFunctions.HOUR, new ExtractFunctionModifier(INTEGER_TYPE)); 
+        registerFunctionModifier(SourceSystemFunctions.MINUTE, new ExtractFunctionModifier(INTEGER_TYPE)); 
+        registerFunctionModifier(SourceSystemFunctions.MONTH, new ExtractFunctionModifier(INTEGER_TYPE)); 
         registerFunctionModifier(SourceSystemFunctions.MONTHNAME, new MonthOrDayNameFunctionModifier(getLanguageFactory(), "Month"));//$NON-NLS-1$ 
-        registerFunctionModifier(SourceSystemFunctions.QUARTER, new ExtractFunctionModifier()); 
-        registerFunctionModifier(SourceSystemFunctions.SECOND, new ExtractFunctionModifier()); 
-        registerFunctionModifier(SourceSystemFunctions.WEEK, new ExtractFunctionModifier()); 
-        registerFunctionModifier(SourceSystemFunctions.YEAR, new ExtractFunctionModifier()); 
+        registerFunctionModifier(SourceSystemFunctions.QUARTER, new ExtractFunctionModifier(INTEGER_TYPE)); 
+        registerFunctionModifier(SourceSystemFunctions.SECOND, new ExtractFunctionModifier(INTEGER_TYPE)); 
+        registerFunctionModifier(SourceSystemFunctions.WEEK, new ExtractFunctionModifier(INTEGER_TYPE)); 
+        registerFunctionModifier(SourceSystemFunctions.YEAR, new ExtractFunctionModifier(INTEGER_TYPE)); 
         registerFunctionModifier(SourceSystemFunctions.LOCATE, new LocateFunctionModifier(getLanguageFactory()));
         registerFunctionModifier(SourceSystemFunctions.IFNULL, new AliasModifier("coalesce")); //$NON-NLS-1$
         
@@ -160,12 +176,29 @@ public class PostgreSQLExecutionFactory extends JDBCExecutionFactory {
 				return null;
 			}
 		});
+        registerFunctionModifier(SourceSystemFunctions.ROUND, new FunctionModifier() {
+			
+			@Override
+			public List<?> translate(Function function) {
+				if (function.getParameters().size() > 1) {
+					Expression ex = function.getParameters().get(0);
+					if (ex.getType() == TypeFacility.RUNTIME_TYPES.DOUBLE || ex.getType() == TypeFacility.RUNTIME_TYPES.FLOAT) {
+						if (function.getParameters().get(1) instanceof Literal && Integer.valueOf(0).equals(((Literal)function.getParameters().get(1)).getValue())) {
+							function.getParameters().remove(1);
+						} else {
+							function.getParameters().set(0, new Function(SourceSystemFunctions.CONVERT, Arrays.asList(ex, new Literal("bigdecimal", TypeFacility.RUNTIME_TYPES.STRING)), TypeFacility.RUNTIME_TYPES.BIG_DECIMAL)); //$NON-NLS-1$
+						}
+					}
+				}
+				return null;
+			}
+		});
                 
         //add in type conversion
         ConvertModifier convertModifier = new ConvertModifier();
         convertModifier.addTypeMapping("boolean", FunctionModifier.BOOLEAN); //$NON-NLS-1$
     	convertModifier.addTypeMapping("smallint", FunctionModifier.BYTE, FunctionModifier.SHORT); //$NON-NLS-1$
-    	convertModifier.addTypeMapping("integer", FunctionModifier.INTEGER); //$NON-NLS-1$
+    	convertModifier.addTypeMapping(INTEGER_TYPE, FunctionModifier.INTEGER); 
     	convertModifier.addTypeMapping("bigint", FunctionModifier.LONG); //$NON-NLS-1$
     	convertModifier.addTypeMapping("real", FunctionModifier.FLOAT); //$NON-NLS-1$
     	convertModifier.addTypeMapping("float8", FunctionModifier.DOUBLE); //$NON-NLS-1$
@@ -176,6 +209,9 @@ public class PostgreSQLExecutionFactory extends JDBCExecutionFactory {
     	convertModifier.addTypeMapping("date", FunctionModifier.DATE); //$NON-NLS-1$
     	convertModifier.addTypeMapping("time", FunctionModifier.TIME); //$NON-NLS-1$
     	convertModifier.addTypeMapping("timestamp", FunctionModifier.TIMESTAMP); //$NON-NLS-1$
+    	convertModifier.addConvert(FunctionModifier.BIGDECIMAL, FunctionModifier.BOOLEAN, new NonIntegralNumberToBoolean());
+    	convertModifier.addConvert(FunctionModifier.FLOAT, FunctionModifier.BOOLEAN, new NonIntegralNumberToBoolean());
+    	convertModifier.addConvert(FunctionModifier.BIGDECIMAL, FunctionModifier.BOOLEAN, new NonIntegralNumberToBoolean());
     	convertModifier.addConvert(FunctionModifier.TIME, FunctionModifier.TIMESTAMP, new FunctionModifier() {
 			@Override
 			public List<?> translate(Function function) {
@@ -201,12 +237,60 @@ public class PostgreSQLExecutionFactory extends JDBCExecutionFactory {
     	convertModifier.addSourceConversion(new FunctionModifier() {
 			@Override
 			public List<?> translate(Function function) {
-				((Literal)function.getParameters().get(1)).setValue("integer"); //$NON-NLS-1$
+				((Literal)function.getParameters().get(1)).setValue(INTEGER_TYPE); 
 				return null;
 			}
 		}, FunctionModifier.BOOLEAN);
     	registerFunctionModifier(SourceSystemFunctions.CONVERT, convertModifier); 
     }    
+    
+    @Override
+    public void initCapabilities(Connection connection)
+    		throws TranslatorException {
+    	super.initCapabilities(connection);
+    	if (getVersion().compareTo(NINE_0) <= 0) {
+	        registerFunctionModifier(SourceSystemFunctions.LEFT, new LeftOrRightFunctionModifier(getLanguageFactory()));
+        }
+    	if (this.postGisVersion.compareTo(Version.DEFAULT_VERSION) != 0) {
+    		return;
+    	}
+    	Statement s = null;
+    	ResultSet rs = null;
+    	try {
+	    	s = connection.createStatement();
+	    	rs = s.executeQuery("SELECT PostGIS_Full_Version()"); //$NON-NLS-1$
+	    	rs.next();
+	    	String versionInfo = rs.getString(1);
+	    	if (versionInfo != null) {
+	    		if (versionInfo.contains("PROJ=")) { //$NON-NLS-1$
+	    			projSupported = true;
+	    		}
+	    		int index = versionInfo.indexOf("POSTGIS="); //$NON-NLS-1$
+	    		if (index > -1) {
+	    			String version = versionInfo.substring(index+9, versionInfo.indexOf('"', index+9));
+	    	    	this.setPostGisVersion(version);
+	    		}
+	    	}
+    	} catch (SQLException e) {
+    		LogManager.logDetail(LogConstants.CTX_CONNECTOR, e, "Could not determine PostGIS version"); //$NON-NLS-1$
+    	} finally {
+    		try {
+    			if (rs != null) {
+    				rs.close();
+    			}
+    		} catch (SQLException e) {
+    			
+    		}
+    		try {
+    			if (s != null) {
+    				s.close();
+    			}
+    		} catch (SQLException e) {
+    			
+    		}
+    	}
+    }
+    
     
     @Override
     public String translateLiteralBoolean(Boolean booleanValue) {
@@ -347,7 +431,9 @@ public class PostgreSQLExecutionFactory extends JDBCExecutionFactory {
         supportedFunctions.add("LTRIM"); //$NON-NLS-1$
         supportedFunctions.add("REPEAT"); //$NON-NLS-1$
         supportedFunctions.add("REPLACE"); //$NON-NLS-1$
-        supportedFunctions.add("RIGHT"); //$NON-NLS-1$
+        if (getVersion().compareTo(NINE_0) > 0) {
+        	supportedFunctions.add("RIGHT"); //$NON-NLS-1$
+        }
         supportedFunctions.add("RPAD"); //$NON-NLS-1$
         supportedFunctions.add("RTRIM"); //$NON-NLS-1$
         supportedFunctions.add("SUBSTRING"); //$NON-NLS-1$
@@ -501,6 +587,37 @@ public class PostgreSQLExecutionFactory extends JDBCExecutionFactory {
         supportedFunctions.add(SourceSystemFunctions.ARRAY_LENGTH);
         supportedFunctions.add(SourceSystemFunctions.FORMATTIMESTAMP); 
         supportedFunctions.add(SourceSystemFunctions.PARSETIMESTAMP);
+        
+        if (this.postGisVersion.compareTo(ONE_3) >= 0) {
+        	supportedFunctions.add(SourceSystemFunctions.ST_ASBINARY);
+        	supportedFunctions.add(SourceSystemFunctions.ST_ASTEXT);
+        	supportedFunctions.add(SourceSystemFunctions.ST_CONTAINS);
+        	supportedFunctions.add(SourceSystemFunctions.ST_CROSSES);
+        	supportedFunctions.add(SourceSystemFunctions.ST_DISJOINT);
+        	supportedFunctions.add(SourceSystemFunctions.ST_DISTANCE);
+        	supportedFunctions.add(SourceSystemFunctions.ST_EQUALS);
+        	supportedFunctions.add(SourceSystemFunctions.ST_GEOMFROMTEXT);
+        	supportedFunctions.add(SourceSystemFunctions.ST_GEOMFROMWKB);
+        	supportedFunctions.add(SourceSystemFunctions.ST_INTERSECTS);
+        	supportedFunctions.add(SourceSystemFunctions.ST_OVERLAPS);
+        	supportedFunctions.add(SourceSystemFunctions.ST_SETSRID);
+        	supportedFunctions.add(SourceSystemFunctions.ST_SRID);
+        	supportedFunctions.add(SourceSystemFunctions.ST_TOUCHES);
+        }
+        if (this.postGisVersion.compareTo(ONE_4) >= 0) {
+        	supportedFunctions.add(SourceSystemFunctions.ST_ASGEOJSON);
+        	supportedFunctions.add(SourceSystemFunctions.ST_ASGML);
+        }
+        if (this.postGisVersion.compareTo(ONE_5) >= 0) {
+        	supportedFunctions.add(SourceSystemFunctions.ST_GEOMFROMGML);
+        }
+        if (this.postGisVersion.compareTo(TWO_0) >= 0) {
+        	supportedFunctions.add(SourceSystemFunctions.ST_GEOMFROMGEOJSON);
+        }
+        if (this.projSupported) {
+        	supportedFunctions.add(SourceSystemFunctions.ST_TRANSFORM);
+        	supportedFunctions.add(SourceSystemFunctions.ST_ASKML);
+        }
         return supportedFunctions;
     }
     
@@ -632,6 +749,127 @@ public class PostgreSQLExecutionFactory extends JDBCExecutionFactory {
     			
     		}
     	}
+    }
+    
+    @Override
+    public SQLConversionVisitor getSQLConversionVisitor() {
+    	return new SQLConversionVisitor(this) {
+    		@Override
+    		protected void appendWithKeyword(With obj) {
+    			super.appendWithKeyword(obj);
+    			for (WithItem with : obj.getItems()) {
+    				if (with.isRecusive()) {
+    					buffer.append(SQLConstants.Tokens.SPACE);
+    					buffer.append(SQLConstants.Reserved.RECURSIVE);
+    					break;
+    				}
+    			}
+    		}
+    		
+    		/**
+    		 * String literals in the select need a cast to prevent being seen as the unknown type
+    		 */
+    		@Override
+    		public void visit(DerivedColumn obj) {
+    			if (obj.getExpression().getType() == DataTypeManager.DefaultDataClasses.STRING
+    					&& obj.getExpression() instanceof Literal) {
+    				obj.setExpression(getLanguageFactory().createFunction("cast", //$NON-NLS-1$ 
+    						new Expression[] {obj.getExpression(),  getLanguageFactory().createLiteral("bpchar", TypeFacility.RUNTIME_TYPES.STRING)}, //$NON-NLS-1$
+    						TypeFacility.RUNTIME_TYPES.STRING));
+    			}
+    			super.visit(obj);
+    		}
+    	};
+    }
+    
+    public void setPostGisVersion(String postGisVersion) {
+		this.postGisVersion = Version.getVersion(postGisVersion);
+	}
+    
+    @TranslatorProperty(display="PostGIS Version", description="The version of the PostGIS extension.",advanced=true)
+    public String getPostGisVersion() {
+		return postGisVersion.toString();
+	}
+    
+    @TranslatorProperty(display="Proj support enabled", description="If PostGIS Proj support is enabled for ST_TRANSFORM",advanced=true)
+    public boolean isProjSupported() {
+		return projSupported;
+	}
+    
+    public void setProjSupported(boolean projSupported) {
+		this.projSupported = projSupported;
+	}
+    
+    @Override
+    public MetadataProcessor<Connection> getMetadataProcessor() {
+    	return new JDBCMetdataProcessor() {
+            @Override
+            protected String getRuntimeType(int type, String typeName, int precision) {
+                //pg will otherwise report a 1111/other type for geometry
+            	if ("geometry".equalsIgnoreCase(typeName)) { //$NON-NLS-1$
+                    return TypeFacility.RUNTIME_NAMES.GEOMETRY;
+                }                
+                return super.getRuntimeType(type, typeName, precision);                    
+            }
+            
+            @Override
+            protected void getGeometryMetadata(Column c, Connection conn,
+            		String tableCatalog, String tableSchema, String tableName,
+            		String columnName) {
+            	PreparedStatement ps = null;
+            	ResultSet rs = null;
+            	try {
+            		if (tableCatalog == null) {
+            			tableCatalog = conn.getCatalog();
+            		}
+	            	ps = conn.prepareStatement("select coord_dimension, srid, type from public.geometry_columns where f_table_catalog=? and f_table_schema=? and f_table_name=? and f_geometry_column=?"); //$NON-NLS-1$
+	            	ps.setString(1, tableCatalog);
+	            	ps.setString(2, tableSchema);
+	            	ps.setString(3, tableName);
+	            	ps.setString(4, columnName);
+	            	rs = ps.executeQuery();
+	            	if (rs.next()) {
+	            		c.setProperty(MetadataFactory.SPATIAL_URI + "coord_dimension", rs.getString(1)); //$NON-NLS-1$
+	            		c.setProperty(MetadataFactory.SPATIAL_URI + "srid", rs.getString(2)); //$NON-NLS-1$
+	            		c.setProperty(MetadataFactory.SPATIAL_URI + "type", rs.getString(3)); //$NON-NLS-1$
+	            	}
+            	} catch (SQLException e) {
+            		LogManager.logDetail(LogConstants.CTX_CONNECTOR, e, "Could not get geometry metadata for column", tableSchema, tableName, columnName); //$NON-NLS-1$
+            	} finally {
+            		if (rs != null) {
+            			try {
+							rs.close();
+						} catch (SQLException e) {
+						}
+            		}
+            		if (ps != null) {
+            			try {
+							ps.close();
+						} catch (SQLException e) {
+						}
+            		}
+            	}
+            }
+    	};
+    }
+    
+    @Override
+    public Expression translateGeometrySelect(Expression expr) {
+        return new Function("ST_ASEWKB", Arrays.asList(expr), TypeFacility.RUNTIME_TYPES.VARBINARY); //$NON-NLS-1$
+    }
+
+    @Override
+    public Object retrieveGeometryValue(ResultSet results, int paramIndex) throws SQLException {
+        final byte[] bytes = results.getBytes(paramIndex);
+        if (bytes != null) {
+            return new GeometryInputSource() {
+            	@Override
+            	public InputStream getEwkb() throws Exception {
+            		return new ByteArrayInputStream(bytes);
+            	}
+			};
+        }
+        return null;
     }
     
 }

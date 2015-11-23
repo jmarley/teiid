@@ -39,6 +39,7 @@ import org.teiid.query.metadata.SystemMetadata;
 import org.teiid.query.metadata.TransformationMetadata;
 import org.teiid.query.optimizer.TestOptimizer.ComparisonMode;
 import org.teiid.query.optimizer.capabilities.BasicSourceCapabilities;
+import org.teiid.query.optimizer.capabilities.CapabilitiesFinder;
 import org.teiid.query.optimizer.capabilities.DefaultCapabilitiesFinder;
 import org.teiid.query.optimizer.capabilities.FakeCapabilitiesFinder;
 import org.teiid.query.optimizer.capabilities.SourceCapabilities.Capability;
@@ -46,9 +47,11 @@ import org.teiid.query.optimizer.relational.rules.RuleChooseDependent;
 import org.teiid.query.processor.ProcessorPlan;
 import org.teiid.query.processor.relational.AccessNode;
 import org.teiid.query.processor.relational.DependentAccessNode;
+import org.teiid.query.processor.relational.JoinNode;
 import org.teiid.query.processor.relational.RelationalNode;
 import org.teiid.query.processor.relational.RelationalPlan;
 import org.teiid.query.sql.lang.Command;
+import org.teiid.query.sql.lang.JoinType;
 import org.teiid.query.sql.symbol.GroupSymbol;
 import org.teiid.query.sql.visitor.GroupCollectorVisitor;
 import org.teiid.query.unittest.RealMetadataFactory;
@@ -809,7 +812,7 @@ public class TestDependentJoins {
             "SELECT table1comp.IntKey, table1comp.key1, BQT1.SmallA.StringKey FROM (SELECT t1.*, (STRINGKEY || STRINGNUM) AS key1 FROM BQT2.SmallA AS t1) AS table1comp, BQT1.SmallA WHERE table1comp.key1 = BQT1.SmallA.StringKey AND table1comp.key1 = BQT1.SmallA.StringNum",  //$NON-NLS-1$
             metadata,
             null, capFinder,
-            new String[] {"SELECT g_0.StringKey, g_0.StringNum, g_0.IntKey FROM BQT2.SmallA AS g_0", "SELECT g_0.StringKey, g_0.StringNum FROM BQT1.SmallA AS g_0 WHERE (g_0.StringNum = g_0.StringKey) AND ((g_0.StringKey, g_0.StringNum) IN (<dependent values>))"}, //$NON-NLS-1$ //$NON-NLS-2$
+            new String[] {"SELECT g_0.StringKey, g_0.StringNum, g_0.IntKey FROM BQT2.SmallA AS g_0", "SELECT g_0.StringKey, g_0.StringNum FROM BQT1.SmallA AS g_0 WHERE (g_0.StringNum = g_0.StringKey) AND (g_0.StringKey IN (<dependent values>))"}, //$NON-NLS-1$ //$NON-NLS-2$
             TestOptimizer.ComparisonMode.EXACT_COMMAND_STRING );
 
         TestOptimizer.checkNodeTypes(plan, new int[] {
@@ -985,7 +988,7 @@ public class TestDependentJoins {
         capFinder.addCapabilities("pm2", caps); //$NON-NLS-1$
         
         ProcessorPlan plan = TestOptimizer.helpPlan("select pm1.g1.e1 from pm1.g1, pm2.g1, pm2.g2 where pm1.g1.e1 = pm2.g1.e1 and pm1.g1.e1 = pm2.g2.e1 and pm2.g1.e2 = pm2.g2.e2 option makedep pm2.g1", RealMetadataFactory.example1Cached(), null, capFinder, //$NON-NLS-1$
-            new String[] { "SELECT g_1.e1, g_0.e1 FROM pm2.g1 AS g_0, pm2.g2 AS g_1 WHERE (g_0.e2 = g_1.e2) AND (g_1.e1 = g_0.e1) AND (g_1.e1 IN (<dependent values>)) AND (g_0.e1 IN (<dependent values>))", "SELECT g_0.e1 FROM pm1.g1 AS g_0" }, TestOptimizer.ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ //$NON-NLS-2$
+            new String[] { "SELECT g_1.e1, g_0.e1 FROM pm2.g1 AS g_0, pm2.g2 AS g_1 WHERE (g_0.e2 = g_1.e2) AND (g_1.e1 = g_0.e1) AND (g_1.e1 IN (<dependent values>))", "SELECT g_0.e1 FROM pm1.g1 AS g_0" }, TestOptimizer.ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ //$NON-NLS-2$
 
         TestOptimizer.checkNodeTypes(plan, new int[] {
             1,      // Access
@@ -1003,6 +1006,46 @@ public class TestDependentJoins {
             0,      // Sort
             0       // UnionAll
         });
+    }
+    
+    @Test public void testNestedLeftOuterJoin() throws TeiidComponentException, TeiidProcessingException {
+    	String sql = "select pm1.g1.e2, 'a', trim(pm1.g3.e1) from (pm1.g1 left outer join pm1.g2 on pm1.g1.e2 = pm1.g2.e2) left outer join pm1.g3 on pm1.g3.e3 = pm1.g2.e3 and pm1.g3.e4 = pm1.g1.e4"; //$NON-NLS-1$
+
+        QueryMetadataInterface metadata = RealMetadataFactory.example1();
+        RealMetadataFactory.setCardinality("pm1.g2", 6, metadata); //$NON-NLS-1$
+        RealMetadataFactory.setCardinality("pm1.g1", 0, metadata); //$NON-NLS-1$
+        RealMetadataFactory.setCardinality("pm1.g3", 0, metadata); //$NON-NLS-1$
+
+    	CapabilitiesFinder finder = TestOptimizer.getGenericFinder(false);
+    	
+        ProcessorPlan plan = TestOptimizer.helpPlan(sql, metadata, new String[] {
+        		"SELECT g_0.e3, g_0.e4, g_0.e1 FROM pm1.g3 AS g_0",
+        		"SELECT g_0.e2, g_0.e4 FROM pm1.g1 AS g_0", 
+        		"SELECT g_0.e2, g_0.e3 FROM pm1.g2 AS g_0 WHERE g_0.e2 IN (<dependent values>)"}, finder, ComparisonMode.EXACT_COMMAND_STRING); 
+
+        TestOptimizer.checkNodeTypes(plan, new int[] {
+            2,      // Access
+            1,      // DependentAccess
+            0,      // DependentSelect
+            0,      // DependentProject
+            0,      // DupRemove
+            0,      // Grouping
+            0,      // Join
+            2,      // MergeJoin
+            0,      // Null
+            0,      // PlanExecution
+            1,      // Project
+            0,      // Select
+            0,      // Sort
+            0       // UnionAll
+        });
+        
+        RelationalPlan rPlan = (RelationalPlan)plan;
+        RelationalNode node = rPlan.getRootNode().getChildren()[0];
+        assertTrue(node instanceof JoinNode);
+        node = node.getChildren()[0];
+        assertTrue(node instanceof JoinNode);
+        assertEquals(JoinType.JOIN_LEFT_OUTER, ((JoinNode)node).getJoinType());
     }
     
 }

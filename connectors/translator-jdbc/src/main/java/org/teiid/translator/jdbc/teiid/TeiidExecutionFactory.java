@@ -50,6 +50,7 @@ public class TeiidExecutionFactory extends JDBCExecutionFactory {
 	public static final Version EIGHT_3 = Version.getVersion("8.3"); //$NON-NLS-1$
 	public static final Version EIGHT_4 = Version.getVersion("8.4"); //$NON-NLS-1$
 	public static final Version EIGHT_5 = Version.getVersion("8.5"); //$NON-NLS-1$
+	public static final Version EIGHT_10 = Version.getVersion("8.10"); //$NON-NLS-1$
 	
 	public TeiidExecutionFactory() {
 	}
@@ -167,6 +168,23 @@ public class TeiidExecutionFactory extends JDBCExecutionFactory {
         	supportedFunctions.add(SourceSystemFunctions.ENDSWITH);
         }
         
+        if (getVersion().compareTo(EIGHT_10) >= 0) {
+        	supportedFunctions.add(SourceSystemFunctions.ST_ASBINARY);
+        	supportedFunctions.add(SourceSystemFunctions.ST_ASTEXT);
+        	supportedFunctions.add(SourceSystemFunctions.ST_CONTAINS);
+        	supportedFunctions.add(SourceSystemFunctions.ST_CROSSES);
+        	supportedFunctions.add(SourceSystemFunctions.ST_DISJOINT);
+        	supportedFunctions.add(SourceSystemFunctions.ST_DISTANCE);
+        	supportedFunctions.add(SourceSystemFunctions.ST_EQUALS);
+        	supportedFunctions.add(SourceSystemFunctions.ST_GEOMFROMWKB);
+        	supportedFunctions.add(SourceSystemFunctions.ST_GEOMFROMTEXT);
+        	supportedFunctions.add(SourceSystemFunctions.ST_INTERSECTS);
+        	supportedFunctions.add(SourceSystemFunctions.ST_OVERLAPS);
+        	supportedFunctions.add(SourceSystemFunctions.ST_TOUCHES);
+        	supportedFunctions.add(SourceSystemFunctions.ST_SRID);
+        	supportedFunctions.add(SourceSystemFunctions.ST_SETSRID);
+        }
+        
         return supportedFunctions;
     }
     
@@ -215,6 +233,11 @@ public class TeiidExecutionFactory extends JDBCExecutionFactory {
     @Override
     public boolean supportsCommonTableExpressions() {
     	return getVersion().compareTo(SEVEN_2) >= 0;
+    }
+    
+    @Override
+    public boolean supportsRecursiveCommonTableExpressions() {
+    	return getVersion().compareTo(EIGHT_10) >= 0;
     }
     
     @Override
@@ -326,6 +349,17 @@ public class TeiidExecutionFactory extends JDBCExecutionFactory {
     @Override
     public boolean supportsGroupByRollup() {
     	return getVersion().compareTo(EIGHT_5) >= 0;
+    }
+    
+    @Override
+    public boolean useScientificNotation() {
+    	return true;
+    }
+    
+    @Override
+    public boolean supportsOrderByUnrelated() {
+    	//prior to 8.10 we did not support unrelated from the grouping columns
+    	return getVersion().compareTo(EIGHT_10) >= 0;
     }
     
 }

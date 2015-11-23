@@ -24,6 +24,7 @@ package org.teiid.metadata;
 
 import java.io.IOException;
 import java.io.Serializable;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -40,11 +41,15 @@ import org.teiid.core.util.StringUtil;
  */
 public abstract class AbstractMetadataRecord implements Serializable {
 	
+	private static final Collection<AbstractMetadataRecord> EMPTY_INCOMING = Collections.emptyList();
+	
 	public interface Modifiable {
 		long getLastModified();
 	}
 	
 	public interface DataModifiable {
+		public static final String DATA_TTL = AbstractMetadataRecord.RELATIONAL_URI + "data-ttl"; //$NON-NLS-1$
+		
 		long getLastDataModification();
 	}
 	
@@ -61,6 +66,8 @@ public abstract class AbstractMetadataRecord implements Serializable {
 	
 	private volatile Map<String, String> properties;
 	private String annotation;
+	
+	private transient Collection<AbstractMetadataRecord> incomingObjects;
 
 	public static final String RELATIONAL_URI = "{http://www.teiid.org/ext/relational/2012}"; //$NON-NLS-1$
 	
@@ -81,6 +88,18 @@ public abstract class AbstractMetadataRecord implements Serializable {
 	
 	public void setNameInSource(String nameInSource) {
 		this.nameInSource = DataTypeManager.getCanonicalString(nameInSource);
+	}
+	
+	/**
+	 * Get the name in source or the name if
+	 * the name in source is not set.
+	 * @return
+	 */
+	public String getSourceName() {
+		if (this.nameInSource != null && this.nameInSource.length() > 0) {
+			return this.nameInSource;
+		}
+		return getName();
 	}
 	
 	/**
@@ -233,6 +252,21 @@ public abstract class AbstractMetadataRecord implements Serializable {
 
     public int hashCode() {
         return getUUID().hashCode();
+    }
+    
+    public Collection<AbstractMetadataRecord> getIncomingObjects() {
+    	if (incomingObjects == null) {
+    		return EMPTY_INCOMING;
+    	}
+		return incomingObjects;
+	}
+    
+    public void setIncomingObjects(Collection<AbstractMetadataRecord> incomingObjects) {
+		this.incomingObjects = incomingObjects;
+	}
+    
+    public boolean isUUIDSet() {
+    	return this.uuid != null && this.uuid.length() > 0 && !Character.isDigit(this.uuid.charAt(0));
     }
         
 }

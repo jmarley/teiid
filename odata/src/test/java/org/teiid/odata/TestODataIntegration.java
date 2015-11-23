@@ -28,6 +28,8 @@ import static org.mockito.Mockito.*;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.math.BigDecimal;
+import java.net.URL;
+import java.net.URLDecoder;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.EnumSet;
@@ -36,6 +38,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.StringTokenizer;
 
 import javax.ws.rs.core.MediaType;
 
@@ -69,6 +72,7 @@ import org.odata4j.producer.resources.ServiceDocumentResource;
 import org.teiid.adminapi.Admin.SchemaObjectType;
 import org.teiid.adminapi.Model.Type;
 import org.teiid.adminapi.impl.ModelMetaData;
+import org.teiid.adminapi.impl.VDBMetaData;
 import org.teiid.core.util.ObjectConverterUtil;
 import org.teiid.core.util.UnitTestUtil;
 import org.teiid.dqp.service.AutoGenDataService;
@@ -78,6 +82,7 @@ import org.teiid.jdbc.TeiidDriver;
 import org.teiid.json.simple.ContentHandler;
 import org.teiid.json.simple.JSONParser;
 import org.teiid.json.simple.ParseException;
+import org.teiid.json.simple.SimpleContentHandler;
 import org.teiid.language.QueryExpression;
 import org.teiid.metadata.KeyRecord;
 import org.teiid.metadata.MetadataStore;
@@ -95,7 +100,6 @@ import org.teiid.query.unittest.TimestampUtil;
 import org.teiid.runtime.EmbeddedConfiguration;
 import org.teiid.runtime.EmbeddedServer;
 import org.teiid.runtime.HardCodedExecutionFactory;
-import org.teiid.translator.odata.ODataEntitySchemaBuilder;
 
 @SuppressWarnings("nls")
 public class TestODataIntegration extends BaseResourceTest {
@@ -164,10 +168,9 @@ public class TestODataIntegration extends BaseResourceTest {
 	}
 
 	private static TransformationMetadata metadata;
-	private static EdmDataServices eds;
 	
 	@BeforeClass
-	public static void before() throws Exception {
+	public static void before() throws Exception {	    
 		deployment = EmbeddedContainer.start("/odata/northwind");
 		dispatcher = deployment.getDispatcher();
 		deployment.getRegistry().addPerRequestResource(EntitiesRequestResource.class);
@@ -175,39 +178,72 @@ public class TestODataIntegration extends BaseResourceTest {
 		deployment.getRegistry().addPerRequestResource(MetadataResource.class);
 		deployment.getRegistry().addPerRequestResource(ServiceDocumentResource.class);
 		deployment.getProviderFactory().registerProvider(ODataBatchProvider.class);
-		deployment.getProviderFactory().addExceptionMapper(ODataExceptionMappingProvider.class);
-		deployment.getProviderFactory().addContextResolver(org.teiid.odata.MockProvider.class);		
-		metadata = RealMetadataFactory.fromDDL(ObjectConverterUtil.convertFileToString(UnitTestUtil.getTestDataFile("northwind.ddl")),"northwind", "nw");
-		eds = ODataEntitySchemaBuilder.buildMetadata(metadata.getMetadataStore());
+		deployment.getProviderFactory().registerProvider(ODataExceptionMappingProvider.class);
+		deployment.getProviderFactory().registerProvider(MockProvider.class);		
+		metadata = RealMetadataFactory.fromDDL(ObjectConverterUtil.convertFileToString(UnitTestUtil.getTestDataFile("northwind.ddl")),"northwind", "nw");		
 	}	
 	
 	@Test
 	public void testMetadata() throws Exception {
-		Client client = mock(Client.class);
-		stub(client.getMetadataStore()).toReturn(metadata.getMetadataStore());	
-		stub(client.getMetadata()).toReturn(eds);
+		Client client = mockClient();
 		MockProvider.CLIENT = client;
 		
 		StringWriter sw = new StringWriter();
 		
-		EdmxFormatWriter.write(eds, sw);
+		EdmxFormatWriter.write(client.getMetadata(), sw);
 		
         ClientRequest request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/$metadata"));
         ClientResponse<String> response = request.get(String.class);
         Assert.assertEquals(200, response.getStatus());
-        Assert.assertEquals(sw.toString(), response.getEntity());		
+        Assert.assertEquals(sw.toString(), response.getEntity());
 	}
+	
+    protected Client mockClient2() {
+        Client client = mock(Client.class);
+        VDBMetaData vdb = mock(VDBMetaData.class);
+        ModelMetaData model = mock(ModelMetaData.class);
+        stub(model.isVisible()).toReturn(false);
+        stub(vdb.getModel("nw")).toReturn(model);
+        stub(client.getMetadataStore()).toReturn(metadata.getMetadataStore());  
+        EdmDataServices eds = LocalClient.buildMetadata(vdb, metadata.getMetadataStore());
+        stub(client.getMetadata()).toReturn(eds);
+        return client;
+    }	
+	
+    @Test
+    public void testMetadataVisibility() throws Exception {
+        Client client = mockClient2();
+        MockProvider.CLIENT = client;
+        
+        StringWriter sw = new StringWriter();
+        
+        EdmxFormatWriter.write(client.getMetadata(), sw);
+        
+        ClientRequest request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/$metadata"));
+        ClientResponse<String> response = request.get(String.class);
+        Assert.assertEquals(200, response.getStatus());
+        Assert.assertEquals(sw.toString(), response.getEntity());  
+        String edm = "<?xml version=\"1.0\" encoding=\"utf-8\"?><edmx:Edmx Version=\"1.0\" xmlns:edmx=\"http://schemas.microsoft.com/ado/2007/06/edmx\"><edmx:DataServices m:DataServiceVersion=\"2.0\" xmlns:m=\"http://schemas.microsoft.com/ado/2007/08/dataservices/metadata\"></edmx:DataServices></edmx:Edmx>";
+        Assert.assertEquals(edm, response.getEntity());
+    }	
+
+    protected Client mockClient() {
+        Client client = mock(Client.class);
+        VDBMetaData vdb = mock(VDBMetaData.class);
+		stub(client.getMetadataStore()).toReturn(metadata.getMetadataStore());	
+		EdmDataServices eds = LocalClient.buildMetadata(vdb, metadata.getMetadataStore());
+		stub(client.getMetadata()).toReturn(eds);
+        return client;
+    }
 
 	@Test
 	public void testProjectedColumns() throws Exception {
-		Client client = mock(Client.class);
-		stub(client.getMetadataStore()).toReturn(metadata.getMetadataStore());
-		stub(client.getMetadata()).toReturn(eds);
+		Client client = mockClient();
 		MockProvider.CLIENT = client;
 		ArgumentCaptor<Query> sql = ArgumentCaptor.forClass(Query.class);
 		ArgumentCaptor<EdmEntitySet> entitySet = ArgumentCaptor.forClass(EdmEntitySet.class);
 		
-		OEntity entity = createCustomersEntity(eds);
+		OEntity entity = createCustomersEntity(client.getMetadata());
 		ArrayList<OEntity> list = new ArrayList<OEntity>();
 		list.add(entity);
 		
@@ -222,22 +258,21 @@ public class TestODataIntegration extends BaseResourceTest {
         ClientResponse<String> response = request.get(String.class);
         verify(client).executeSQL(sql.capture(),  anyListOf(SQLParam.class), entitySet.capture(), (LinkedHashMap<String, Boolean>) any(), any(QueryInfo.class));
         
-        Assert.assertEquals("SELECT g0.CustomerID, g0.CompanyName, g0.Address FROM Customers AS g0 ORDER BY g0.CustomerID", sql.getValue().toString());
+        Assert.assertEquals("SELECT g0.CustomerID, g0.CompanyName, g0.Address FROM nw.Customers AS g0 ORDER BY g0.CustomerID", sql.getValue().toString());
         Assert.assertEquals(200, response.getStatus());
-        //Assert.assertEquals("", response.getEntity());		
+        Assert.assertTrue(response.getEntity().contains("nw.Customer"));		
+        Assert.assertTrue(!response.getEntity().contains("//Customer"));
 	}	
 	
 	@Test
 	public void testCheckGeneratedColumns() throws Exception {
-		Client client = mock(Client.class);
-		stub(client.getMetadataStore()).toReturn(metadata.getMetadataStore());
-		stub(client.getMetadata()).toReturn(eds);
+		Client client = mockClient();
 		MockProvider.CLIENT = client;
 		ArgumentCaptor<Command> insertCmd = ArgumentCaptor.forClass(Command.class);
 		ArgumentCaptor<Query> sql = ArgumentCaptor.forClass(Query.class);
 		ArgumentCaptor<EdmEntitySet> entitySet = ArgumentCaptor.forClass(EdmEntitySet.class);
 		
-		OEntity entity = createCustomersEntity(eds);
+		OEntity entity = createCustomersEntity(client.getMetadata());
 		ArrayList<OEntity> list = new ArrayList<OEntity>();
 		list.add(entity);
 		
@@ -294,16 +329,14 @@ public class TestODataIntegration extends BaseResourceTest {
         // below selection is based on primary key 1234
         verify(client).executeSQL(sql.capture(),  anyListOf(SQLParam.class), entitySet.capture(), (LinkedHashMap<String, Boolean>) any(), any(QueryInfo.class));
         
-        Assert.assertEquals("INSERT INTO Customers (CompanyName, ContactName, ContactTitle, Address, City, Region, PostalCode, Country, Phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", insertCmd.getValue().toString());
-        Assert.assertEquals("SELECT g0.CustomerID, g0.CompanyName, g0.ContactName, g0.ContactTitle, g0.Address, g0.City, g0.Region, g0.PostalCode, g0.Country, g0.Phone, g0.Fax FROM Customers AS g0 WHERE g0.CustomerID = 1234 ORDER BY g0.CustomerID", sql.getValue().toString());
+        Assert.assertEquals("INSERT INTO nw.Customers (CompanyName, ContactName, ContactTitle, Address, City, Region, PostalCode, Country, Phone) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", insertCmd.getValue().toString());
+        Assert.assertEquals("SELECT g0.* FROM nw.Customers AS g0 WHERE g0.CustomerID = 1234 ORDER BY g0.CustomerID", sql.getValue().toString());
         Assert.assertEquals(201, response.getStatus());
 	}	
 	
 	@Test
 	public void testProcedure() throws Exception {
-		Client client = mock(Client.class);
-		stub(client.getMetadataStore()).toReturn(metadata.getMetadataStore());
-		stub(client.getMetadata()).toReturn(eds);
+		Client client = mockClient();
 		MockProvider.CLIENT = client;
 		ArgumentCaptor<String> sql = ArgumentCaptor.forClass(String.class);
 		ArgumentCaptor<List> params = ArgumentCaptor.forClass(List.class);
@@ -321,10 +354,35 @@ public class TestODataIntegration extends BaseResourceTest {
 	}
 	
 	@Test
+	public void testProcedureNoReturn() throws Exception {
+		EmbeddedServer es = new EmbeddedServer();
+		es.start(new EmbeddedConfiguration());
+		try {
+			ModelMetaData mmd = new ModelMetaData();
+			mmd.setName("vw");
+			mmd.addSourceMetadata("ddl", "create procedure proc () as BEGIN END");
+			mmd.setModelType(Type.VIRTUAL);
+			
+			es.deployVDB("northwind", mmd);
+			
+			TeiidDriver td = es.getDriver();
+			Properties props = new Properties();
+			LocalClient lc = new LocalClient("northwind", 1, props);
+			lc.setDriver(td);
+			MockProvider.CLIENT = lc;
+			
+	        ClientRequest request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/proc"));
+	        ClientResponse<String> response = request.post(String.class);
+	        Assert.assertEquals(204, response.getStatus());
+	        
+		} finally {
+			es.stop();
+		}
+	}
+	
+	@Test
 	public void testSkipNoPKTable() throws Exception {
-		Client client = mock(Client.class);
-		stub(client.getMetadataStore()).toReturn(metadata.getMetadataStore());
-		stub(client.getMetadata()).toReturn(eds);
+		Client client = mockClient();
 		MockProvider.CLIENT = client;
 		
         ClientRequest request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/NoPKTable"));
@@ -336,9 +394,7 @@ public class TestODataIntegration extends BaseResourceTest {
 	
 	@Test
 	public void testError() throws Exception {
-		Client client = mock(Client.class);
-		stub(client.getMetadataStore()).toReturn(metadata.getMetadataStore());
-		stub(client.getMetadata()).toReturn(eds);
+		Client client = mockClient();
 		MockProvider.CLIENT = client;
 		
 		when(client.executeSQL(any(Query.class), anyListOf(SQLParam.class), any(EdmEntitySet.class), (LinkedHashMap<String, Boolean>) any(), any(QueryInfo.class))).thenThrow(new NullPointerException());
@@ -351,15 +407,13 @@ public class TestODataIntegration extends BaseResourceTest {
 	}	
 	
 	@Test
-	public void testProcedureCall() throws Exception {
-		Client client = mock(Client.class);
-		stub(client.getMetadataStore()).toReturn(metadata.getMetadataStore());
-		stub(client.getMetadata()).toReturn(eds);
+	public void testSelect() throws Exception {
+		Client client = mockClient();
 		MockProvider.CLIENT = client;
 		ArgumentCaptor<Query> sql = ArgumentCaptor.forClass(Query.class);
 		ArgumentCaptor<EdmEntitySet> entitySet = ArgumentCaptor.forClass(EdmEntitySet.class);
 		
-		OEntity entity = createCustomersEntity(eds);
+		OEntity entity = createCustomersEntity(client.getMetadata());
 		ArrayList<OEntity> list = new ArrayList<OEntity>();
 		list.add(entity);
 		
@@ -374,11 +428,59 @@ public class TestODataIntegration extends BaseResourceTest {
         ClientResponse<String> response = request.get(String.class);
         verify(client).executeSQL(sql.capture(),  anyListOf(SQLParam.class), entitySet.capture(), (LinkedHashMap<String, Boolean>) any(), any(QueryInfo.class));
         
-        Assert.assertEquals("SELECT g0.CustomerID, g0.CompanyName, g0.Address FROM Customers AS g0 ORDER BY g0.CustomerID", sql.getValue().toString());
+        Assert.assertEquals("SELECT g0.CustomerID, g0.CompanyName, g0.Address FROM nw.Customers AS g0 ORDER BY g0.CustomerID", sql.getValue().toString());
         Assert.assertEquals(200, response.getStatus());
-        //Assert.assertEquals("", response.getEntity());	
         
 	}	
+	
+	@Test
+	public void testGetEntity() throws Exception {
+		EmbeddedServer es = new EmbeddedServer();
+		es.start(new EmbeddedConfiguration());
+		try {
+			ModelMetaData mmd = new ModelMetaData();
+			mmd.setName("vw");
+			mmd.addSourceMetadata("ddl", "create view x (a string primary key, b string) as select 'a', 'b' union all select 'c', 'd';"
+					+ " create view y (a1 string primary key, b1 string, foreign key (a1) references x (a)) as select 'a', 'b' union all select 'c', 'd';");
+			mmd.setModelType(Type.VIRTUAL);
+			es.deployVDB("northwind", mmd);
+			
+			TeiidDriver td = es.getDriver();
+			Properties props = new Properties();
+			LocalClient lc = new LocalClient("northwind", 1, props);
+			lc.setDriver(td);
+			MockProvider.CLIENT = lc;
+			
+	        ClientRequest request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x('a')"));
+	        ClientResponse<String> response = request.get(String.class);
+	        assertTrue(response.getEntity().contains("('a')"));
+	        Assert.assertEquals(200, response.getStatus());
+	        
+	        //a missing entity should be a 404
+	        request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x('v')"));
+	        response = request.get(String.class);
+	        Assert.assertEquals(404, response.getStatus());
+	        
+	        //filter is not applicable to getEntity
+	        request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x('a')?$filter=b eq 'd'"));
+	        response = request.get(String.class);
+	        assertTrue(response.getEntity().contains("('a')"));
+	        Assert.assertEquals(200, response.getStatus());
+	        
+	        //ensure that a child is nav property works
+	        request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x('a')/y"));
+	        response = request.get(String.class);
+	        assertTrue(response.getEntity().contains("('a')"));
+	        Assert.assertEquals(200, response.getStatus());
+	        
+	        request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x('a')/y?$filter=a1 eq 'c'"));
+	        response = request.get(String.class);
+	        assertFalse(response.getEntity().contains("('c')"));
+	        Assert.assertEquals(200, response.getStatus());
+		} finally {
+			es.stop();
+		}
+	}
 	
 	@Test public void testInvalidCharacterReplacement() throws Exception {
 		EmbeddedServer es = new EmbeddedServer();
@@ -386,9 +488,8 @@ public class TestODataIntegration extends BaseResourceTest {
 		try {
 			ModelMetaData mmd = new ModelMetaData();
 			mmd.setName("vw");
-			mmd.setSchemaSourceType("ddl");
+			mmd.addSourceMetadata("ddl", "create view x (a string primary key, b char, c string[], d integer) as select 'ab\u0000cd\u0001', char(22), ('a\u00021','b1'), 1;");
 			mmd.setModelType(Type.VIRTUAL);
-			mmd.setSchemaText("create view x (a string primary key, b char, c string[], d integer) as select 'ab\u0000cd\u0001', char(22), ('a\u00021','b1'), 1;");
 			es.deployVDB("northwind", mmd);
 			
 			TeiidDriver td = es.getDriver();
@@ -414,9 +515,8 @@ public class TestODataIntegration extends BaseResourceTest {
 		try {
 			ModelMetaData mmd = new ModelMetaData();
 			mmd.setName("vw");
-			mmd.setSchemaSourceType("ddl");
+			mmd.addSourceMetadata("ddl", "create view x (a string primary key, b integer[], c string[][]) as select 'x', (1, 2, 3), (('a','b'),('c','d'));");
 			mmd.setModelType(Type.VIRTUAL);
-			mmd.setSchemaText("create view x (a string primary key, b integer[], c string[][]) as select 'x', (1, 2, 3), (('a','b'),('c','d'));");
 			es.deployVDB("northwind", mmd);
 			
 			TeiidDriver td = es.getDriver();
@@ -444,9 +544,8 @@ public class TestODataIntegration extends BaseResourceTest {
 		try {
 			ModelMetaData mmd = new ModelMetaData();
 			mmd.setName("vw");
-			mmd.setSchemaSourceType("ddl");
+			mmd.addSourceMetadata("ddl", "create view x (a string primary key, b integer) as select 'xyz', 123 union all select 'abc', 456;");
 			mmd.setModelType(Type.VIRTUAL);
-			mmd.setSchemaText("create view x (a string primary key, b integer) as select 'xyz', 123 union all select 'abc', 456;");
 			es.deployVDB("northwind", mmd);
 			
 			TeiidDriver td = es.getDriver();
@@ -467,6 +566,10 @@ public class TestODataIntegration extends BaseResourceTest {
 	        assertTrue(!response.getEntity().contains("xyz"));
 	        
 	        //follow the skip
+	        URL url = new URL((String) contentHandler.value);
+	        String skip = getQueryParameter(URLDecoder.decode(url.getQuery(), "UTF-8"), "$skiptoken");
+	        assertTrue(skip.indexOf(LocalClient.DELIMITER) != -1);
+	        
 	        request = new ClientRequest((String) contentHandler.value);
 	        response = request.get(String.class);
 	        assertEquals(200, response.getStatus());
@@ -482,15 +585,65 @@ public class TestODataIntegration extends BaseResourceTest {
 		}
 	}
 	
+    public String getQueryParameter(String queryPath, String param) {
+        if (queryPath != null) {
+            StringTokenizer st = new StringTokenizer(queryPath, "&");
+            while (st.hasMoreTokens()) {
+                String token = st.nextToken();
+                int index = token.indexOf('=');
+                if (index != -1) {
+                    String key = token.substring(0, index);
+                    String value = token.substring(index + 1);
+                    if (key.equals(param)) {
+                        return value;
+                    }
+                }
+            }
+        }
+        return null;
+    }	
+	
+    @Test public void testNoSkipToken() throws Exception {
+        EmbeddedServer es = new EmbeddedServer();
+        es.start(new EmbeddedConfiguration());
+        try {
+            ModelMetaData mmd = new ModelMetaData();
+            mmd.setName("vw");
+            mmd.addSourceMetadata("ddl", "create view x (a string primary key, b integer) as select 'xyz', 123 union all select 'abc', 456;");
+            mmd.setModelType(Type.VIRTUAL);
+            es.deployVDB("northwind", mmd);
+            
+            TeiidDriver td = es.getDriver();
+            Properties props = new Properties();
+            props.setProperty("batch-size", "0");
+            LocalClient lc = new LocalClient("northwind", 1, props);
+            lc.setDriver(td);
+            MockProvider.CLIENT = lc;
+            
+            ClientRequest request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x?$format=json"));
+            ClientResponse<String> response = request.get(String.class);
+            assertEquals(200, response.getStatus());
+            JSONParser parser = new JSONParser();
+            JSONValueExtractor contentHandler = new JSONValueExtractor("__next");
+            parser.parse(response.getEntity(), contentHandler);
+            assertNotNull(contentHandler.next);
+            assertTrue(response.getEntity().contains("abc"));
+            assertTrue(response.getEntity().contains("xyz"));
+            
+            assertNull(contentHandler.value);
+        } finally {
+            es.stop();
+        }
+    }	
+	
 	@Test public void testCount() throws Exception {
 		EmbeddedServer es = new EmbeddedServer();
 		es.start(new EmbeddedConfiguration());
 		try {
 			ModelMetaData mmd = new ModelMetaData();
 			mmd.setName("vw");
-			mmd.setSchemaSourceType("ddl");
+			mmd.addSourceMetadata("ddl", "create view x (a string primary key, b integer) as select 'xyz', 123 union all select 'abc', 456;");
 			mmd.setModelType(Type.VIRTUAL);
-			mmd.setSchemaText("create view x (a string primary key, b integer) as select 'xyz', 123 union all select 'abc', 456;");
 			es.deployVDB("northwind", mmd);
 			
 			TeiidDriver td = es.getDriver();
@@ -529,6 +682,11 @@ public class TestODataIntegration extends BaseResourceTest {
 	        contentHandler.value = null;
 			parser.parse(response.getEntity(), contentHandler);
 	        assertNotNull(contentHandler.value);
+	        
+	        request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x/$count"));
+	        response = request.get(String.class);
+	        assertEquals(200, response.getStatus());
+	        assertEquals("2", response.getEntity());
 		} finally {
 			es.stop();
 		}
@@ -549,8 +707,7 @@ public class TestODataIntegration extends BaseResourceTest {
 		try {
 			ModelMetaData mmd = new ModelMetaData();
 			mmd.setName("m");
-			mmd.setSchemaSourceType("ddl");
-			mmd.setSchemaText("create foreign table x (a string, b string, c integer, primary key (a, b)) options (updatable true);");
+			mmd.addSourceMetadata("ddl", "create foreign table x (a string, b string, c integer, primary key (a, b)) options (updatable true);");
 			mmd.addSourceMapping("x", "x", null);
 			es.deployVDB("northwind", mmd);
 			
@@ -582,12 +739,54 @@ public class TestODataIntegration extends BaseResourceTest {
 	        request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x(a='a',b='b')"));
 	        request.body("application/json", "{\"c\":5}");
 	        response = request.put(String.class);
-	        assertEquals(200, response.getStatus());
+	        assertEquals(204, response.getStatus());
 		} finally {
 			es.stop();
 		}
 	}
-	
+
+    @Test public void testUpdates() throws Exception {
+        EmbeddedServer es = new EmbeddedServer();
+        HardCodedExecutionFactory hc = new HardCodedExecutionFactory() {
+            @Override
+            public boolean supportsCompareCriteriaEquals() {
+                return true;
+            }
+        };
+        hc.addUpdate("DELETE FROM x WHERE x.a = 'a'", new int[] {0});
+        hc.addUpdate("UPDATE x SET c = 5 WHERE x.a = 'a'", new int[] {0});
+        es.addTranslator("x", hc);
+        es.start(new EmbeddedConfiguration());
+        try {
+            ModelMetaData mmd = new ModelMetaData();
+            mmd.setName("m");
+            mmd.addSourceMetadata("ddl", "create foreign table x (a string, b string, c integer, primary key (a)) options (updatable true);");
+            mmd.addSourceMapping("x", "x", null);
+            es.deployVDB("northwind", mmd);
+            
+            TeiidDriver td = es.getDriver();
+            Properties props = new Properties();
+            LocalClient lc = new LocalClient("northwind", 1, props);
+            lc.setDriver(td);
+            MockProvider.CLIENT = lc;
+            
+            ClientRequest request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x(a='a')"));
+            ClientResponse<String> response = request.delete(String.class);
+            assertEquals(404, response.getStatus());
+                        
+            //not supported
+            //request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x(a='a',b='b')/c/$value"));
+            //request.body("text/plain", "5");
+            //response = request.put(String.class);
+            
+            request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x(a='a',b='b')"));
+            request.body("application/json", "{\"c\":5}");
+            response = request.put(String.class);
+            assertEquals(404, response.getStatus());
+        } finally {
+            es.stop();
+        }
+    }	
 	@Test public void testBatch() throws Exception {
 		EmbeddedServer es = new EmbeddedServer();
 		HardCodedExecutionFactory hc = new HardCodedExecutionFactory() {
@@ -602,8 +801,7 @@ public class TestODataIntegration extends BaseResourceTest {
 		try {
 			ModelMetaData mmd = new ModelMetaData();
 			mmd.setName("m");
-			mmd.setSchemaSourceType("ddl");
-			mmd.setSchemaText("create foreign table x (a string, b string, c integer, primary key (a, b)) options (updatable true);");
+			mmd.addSourceMetadata("ddl", "create foreign table x (a string, b string, c integer, primary key (a, b)) options (updatable true);");
 			mmd.addSourceMapping("x", "x", null);
 			es.deployVDB("northwind", mmd);
 			
@@ -638,8 +836,7 @@ public class TestODataIntegration extends BaseResourceTest {
 		try {
 			ModelMetaData mmd = new ModelMetaData();
 			mmd.setName("m");
-			mmd.setSchemaSourceType("ddl");
-			mmd.setSchemaText("create foreign procedure x () returns table(y string);");
+			mmd.addSourceMetadata("ddl", "create foreign procedure x () returns table(y string);");
 			mmd.addSourceMapping("x", "x", null);
 			es.deployVDB("northwind", mmd);
 			
@@ -714,8 +911,7 @@ public class TestODataIntegration extends BaseResourceTest {
 			ModelMetaData mmd = new ModelMetaData();
 			mmd.setName("m");
 			mmd.setModelType(Type.VIRTUAL);
-			mmd.setSchemaSourceType("ddl");
-			mmd.setSchemaText("create view v as select 1");
+			mmd.addSourceMetadata("ddl", "create view v as select 1");
 			
 			Properties props = new Properties();
 			props.setProperty(ODBCServerRemoteImpl.CONNECTION_PROPERTY_PREFIX + ExecutionProperties.RESULT_SET_CACHE_MODE, "true");
@@ -729,6 +925,103 @@ public class TestODataIntegration extends BaseResourceTest {
 			ConnectionImpl impl = lc.getConnection();
 			
 			assertEquals("true", impl.getExecutionProperty(ExecutionProperties.RESULT_SET_CACHE_MODE));
+		} finally {
+			es.stop();
+		}
+	}
+	
+	@Test public void testEmbeddedComplexType() throws Exception {
+		EmbeddedServer es = new EmbeddedServer();
+		es.start(new EmbeddedConfiguration());
+		try {
+			ModelMetaData mmd = new ModelMetaData();
+			mmd.setName("m");
+			mmd.setModelType(Type.VIRTUAL);
+			mmd.addSourceMetadata("ddl", "CREATE VIEW Employees ( EmployeeID integer primary key, "
+					+ "LastName varchar(20), FirstName varchar(10), "
+					+ "Address varchar(60) options (\"teiid_odata:columngroup\" 'Address', \"teiid_odata:complextype\" 'NorthwindModel.Address'),"
+					+ "City varchar(15) options (\"teiid_odata:columngroup\" 'Address', \"teiid_odata:complextype\" 'NorthwindModel.Address')) as "
+					+ "select 1, 'wayne', 'john', '123 place', 'hollywood'");
+			
+			es.deployVDB("northwind", mmd);
+			
+			TeiidDriver td = es.getDriver();
+			Properties props = new Properties();
+			LocalClient lc = new LocalClient("northwind", 1, props);
+			lc.setDriver(td);
+			MockProvider.CLIENT = lc;
+			
+	        ClientRequest request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/Employees?$format=json&$select=Address"));
+	        ClientResponse<String> response = request.get(String.class);
+	        assertEquals(200, response.getStatus());
+	        JSONParser parser = new JSONParser();
+	        SimpleContentHandler sch = new SimpleContentHandler();
+	        parser.parse(response.getEntity(), sch);
+	        Map<String, ?> result = (Map<String, ?>)sch.getResult();
+	        List<Object> results = (List<Object>)((Map<String, ?>)result.get("d")).get("results");
+	        result = (Map<String, ?>)results.get(0);
+	        assertEquals("123 place", result.get("Address"));
+	        assertNull(result.get("City"));
+		} finally {
+			es.stop();
+		}
+	}
+	
+	@Test
+	public void testAmbiguities() throws Exception {
+		EmbeddedServer es = new EmbeddedServer();
+		es.start(new EmbeddedConfiguration());
+		try {
+			ModelMetaData mmd = new ModelMetaData();
+			mmd.setName("vw");
+			mmd.addSourceMetadata("ddl", "create view x (a string primary key) as select 'a'; create virtual procedure y () returns table(y string) as select 'a';");
+			mmd.setModelType(Type.VIRTUAL);
+			
+			ModelMetaData mmd1 = new ModelMetaData();
+			mmd1.setName("vw1");
+			mmd1.addSourceMetadata("ddl", "create view x (a string primary key) as select 'a'; create virtual procedure y () returns table(y string) as select 'a';");
+			mmd1.setModelType(Type.VIRTUAL);
+			es.deployVDB("northwind", mmd, mmd1);
+			
+			TeiidDriver td = es.getDriver();
+			Properties props = new Properties();
+			LocalClient lc = new LocalClient("northwind", 1, props);
+			lc.setDriver(td);
+			MockProvider.CLIENT = lc;
+			
+	        ClientRequest request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x('a')"));
+	        ClientResponse<String> response = request.get(String.class);
+	        Assert.assertEquals(404, response.getStatus());
+	        
+	        request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/y"));
+	        response = request.get(String.class);
+	        Assert.assertEquals(404, response.getStatus());
+		} finally {
+			es.stop();
+		}
+	}
+	
+	@Test
+	public void testUnselectable() throws Exception {
+		EmbeddedServer es = new EmbeddedServer();
+		es.start(new EmbeddedConfiguration());
+		try {
+			ModelMetaData mmd = new ModelMetaData();
+			mmd.setName("vw");
+			mmd.addSourceMetadata("ddl", "create view x (a string primary key, b string options (selectable false)) as select 'a', 'hello';");
+			mmd.setModelType(Type.VIRTUAL);
+			es.deployVDB("northwind", mmd);
+			
+			TeiidDriver td = es.getDriver();
+			Properties props = new Properties();
+			LocalClient lc = new LocalClient("northwind", 1, props);
+			lc.setDriver(td);
+			MockProvider.CLIENT = lc;
+			
+	        ClientRequest request = new ClientRequest(TestPortProvider.generateURL("/odata/northwind/x('a')"));
+	        ClientResponse<String> response = request.get(String.class);
+	        Assert.assertEquals(200, response.getStatus());
+	        assertFalse(response.getEntity().contains("hello"));
 		} finally {
 			es.stop();
 		}

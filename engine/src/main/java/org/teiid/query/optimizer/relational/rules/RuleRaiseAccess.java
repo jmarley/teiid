@@ -120,6 +120,10 @@ public final class RuleRaiseAccess implements OptimizerRule {
             }            
             case NodeConstants.Types.PROJECT:
             {         
+            	if (CapabilitiesUtil.supports(Capability.NO_PROJECTION, modelID, metadata, capFinder)) {
+            		return null;
+            	}
+            	
                 // Check that the PROJECT contains only functions that can be pushed                               
                 List<Expression> projectCols = (List) parentNode.getProperty(NodeConstants.Info.PROJECT_COLS);
                 
@@ -141,7 +145,7 @@ public final class RuleRaiseAccess implements OptimizerRule {
                 }
                 
                 PlanNode orderBy = NodeEditor.findParent(parentNode, NodeConstants.Types.SORT, NodeConstants.Types.SOURCE);
-                if (orderBy != null && orderBy.hasBooleanProperty(Info.UNRELATED_SORT) && !canRaiseOverSort(accessNode, metadata, capFinder, orderBy, record, false)) {
+                if (orderBy != null && orderBy.hasBooleanProperty(Info.UNRELATED_SORT) && !canRaiseOverSort(accessNode, metadata, capFinder, orderBy, record, false, context)) {
                 	//this project node logically has the responsibility of creating the sort keys
             		return null;
                 }
@@ -175,7 +179,7 @@ public final class RuleRaiseAccess implements OptimizerRule {
             }
             case NodeConstants.Types.SORT:
             {         
-                if (canRaiseOverSort(accessNode, metadata, capFinder, parentNode, record, false)) {
+                if (canRaiseOverSort(accessNode, metadata, capFinder, parentNode, record, false, context)) {
                     return performRaise(rootNode, accessNode, parentNode);
                 }
                 return null;
@@ -379,11 +383,19 @@ public final class RuleRaiseAccess implements OptimizerRule {
         }
         return true;
     }
+    
+    static boolean canRaiseOverSort(PlanNode accessNode,
+            QueryMetadataInterface metadata,
+            CapabilitiesFinder capFinder,
+            PlanNode parentNode, AnalysisRecord record, boolean compensateForUnrelated, CommandContext context) throws QueryMetadataException,
+                                TeiidComponentException {
+    	return canRaiseOverSort(accessNode, metadata, capFinder, parentNode, record, compensateForUnrelated, context.getOptions().isRequireTeiidCollation());
+    }
 
 	static boolean canRaiseOverSort(PlanNode accessNode,
                                    QueryMetadataInterface metadata,
                                    CapabilitiesFinder capFinder,
-                                   PlanNode parentNode, AnalysisRecord record, boolean compensateForUnrelated) throws QueryMetadataException,
+                                   PlanNode parentNode, AnalysisRecord record, boolean compensateForUnrelated, boolean checkCollation) throws QueryMetadataException,
                                                        TeiidComponentException {
         // Find the model for this node by getting ACCESS node's model
         Object modelID = getModelIDFromAccess(accessNode, metadata);
@@ -393,12 +405,16 @@ public final class RuleRaiseAccess implements OptimizerRule {
         } 
         
         List<OrderByItem> sortCols = ((OrderBy)parentNode.getProperty(NodeConstants.Info.SORT_ORDER)).getOrderByItems();
+        boolean stringType = false;
         for (OrderByItem symbol : sortCols) {
             if(! canPushSymbol(symbol.getSymbol(), true, modelID, metadata, capFinder, record)) {
                 return false;
             }
             if (!CapabilitiesUtil.supportsNullOrdering(metadata, capFinder, modelID, symbol)) {
             	return false;
+            }
+            if (symbol.getSymbol().getType() == DataTypeManager.DefaultDataClasses.STRING) {
+            	stringType = true;
             }
         }
         
@@ -410,7 +426,7 @@ public final class RuleRaiseAccess implements OptimizerRule {
                 if (!CapabilitiesUtil.supportsSetQueryOrderBy(modelID, metadata, capFinder)) {
                 	return false;
                 }
-            } else if (accessNode.getLastChild().getType() == NodeConstants.Types.TUPLE_LIMIT) { 
+            } else if (accessNode.getLastChild().getType() == NodeConstants.Types.TUPLE_LIMIT || accessNode.getLastChild().getType() == NodeConstants.Types.SORT) { 
             	//check to see the plan is not in a consistent state to have a sort applied	
                 return false;
             }
@@ -435,6 +451,13 @@ public final class RuleRaiseAccess implements OptimizerRule {
         if (accessNode.hasBooleanProperty(Info.IS_MULTI_SOURCE)) {
         	return false;
         }
+        
+    	String collation = (String) CapabilitiesUtil.getProperty(Capability.COLLATION_LOCALE, modelID, metadata, capFinder);
+    	
+    	//we require the collation to match
+    	if (stringType && checkCollation && collation != null && !collation.equals(DataTypeManager.COLLATION_LOCALE)) {
+    		return false;
+    	}
         
         //we don't need to check for extended grouping here since we'll create an inline view later
         

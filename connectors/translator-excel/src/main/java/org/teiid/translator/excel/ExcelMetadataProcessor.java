@@ -26,6 +26,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Pattern;
 
 import javax.resource.ResourceException;
 
@@ -102,17 +103,23 @@ public class ExcelMetadataProcessor implements MetadataProcessor<FileConnection>
 		int firstCellNumber = -1;
 		if (this.hasHeader) {
 			headerRow = sheet.getRow(this.headerRowNumber);
-			firstRowNumber = this.headerRowNumber;
-			firstCellNumber = headerRow.getFirstCellNum();
-			if (firstCellNumber == -1) {
-				LogManager.logInfo(LogConstants.CTX_CONNECTOR, ExcelPlugin.Util.gs(ExcelPlugin.Event.TEIID23006, xlsName));
-				return;
+			if (headerRow != null) {
+    			firstRowNumber = this.headerRowNumber;
+    			firstCellNumber = headerRow.getFirstCellNum();
+    			if (firstCellNumber == -1) {
+    				LogManager.logInfo(LogConstants.CTX_CONNECTOR, ExcelPlugin.Util.gs(ExcelPlugin.Event.TEIID23006, xlsName));
+    				return;
+    			}
 			}
 		}
 
 		if (headerRow == null) {
 			while (firstCellNumber == -1) {
 				headerRow = sheet.getRow(firstRowNumber++);
+				// check if this is a empty sheet; the data must be present in first 10000 rows
+				if (headerRow == null && firstRowNumber > 10000) {
+				    return;
+				}
 				if (headerRow == null) {
 					continue;
 				}
@@ -157,6 +164,16 @@ public class ExcelMetadataProcessor implements MetadataProcessor<FileConnection>
 			for (int j = firstCellNumber; j < lastCellNumber; j++) {
 				Cell headerCell = headerRow.getCell(j);
 				Cell dataCell = dataRow.getCell(j);
+				// if the cell value is null; then advance the data row cursor to to find it 
+				if (dataCell == null) {
+					for (int rowNo = firstRowNumber+1; rowNo < firstRowNumber+10000; rowNo++) {
+						Row row = sheet.getRow(rowNo);
+						dataCell = row.getCell(j);
+						if (dataCell != null) {
+							break;
+						}
+					}
+				}
 				column = mf.addColumn(cellName(headerCell, columnCount), cellType(headerCell, dataCell), table);
 				column.setSearchType(SearchType.Unsearchable);
 				column.setProperty(ExcelMetadataProcessor.CELL_NUMBER, String.valueOf(j+1));
@@ -192,13 +209,16 @@ public class ExcelMetadataProcessor implements MetadataProcessor<FileConnection>
 	} 	
 	
 	private String getCellType(Cell cell) {
+		if (cell == null) {
+			return TypeFacility.RUNTIME_NAMES.STRING;
+		}
 		switch (cell.getCellType()) {
 		case Cell.CELL_TYPE_STRING:
 			return TypeFacility.RUNTIME_NAMES.STRING;
 		case Cell.CELL_TYPE_BOOLEAN:
 			return TypeFacility.RUNTIME_NAMES.BOOLEAN;
 		default:
-			return TypeFacility.RUNTIME_NAMES.DOUBLE;
+			return TypeFacility.RUNTIME_NAMES.DOUBLE;	
 		}
 	}
 	
@@ -211,6 +231,9 @@ public class ExcelMetadataProcessor implements MetadataProcessor<FileConnection>
         //adjust for zero index
         this.hasHeader = true;
         this.headerRowNumber = headerRowNumber-1;
+        if (this.headerRowNumber < 0) {
+            this.headerRowNumber = 0;
+        }
     }
     
     @TranslatorProperty(display="Data Row Number", category=PropertyType.IMPORT, description="Row number from which data rows start from")
@@ -222,6 +245,9 @@ public class ExcelMetadataProcessor implements MetadataProcessor<FileConnection>
         //adjust for zero index
         this.hasDataRowNumber = true;
         this.dataRowNumber = dataRowNumber-1;
+        if (this.dataRowNumber < 0) {
+            this.dataRowNumber = 0;
+        }
     }
 
     @TranslatorProperty(display="Excel File", category=PropertyType.IMPORT, description="Name of the Excel file to read metadata from", required=true)

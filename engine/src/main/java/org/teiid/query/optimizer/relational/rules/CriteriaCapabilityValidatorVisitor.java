@@ -134,6 +134,15 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
     }
     
     @Override
+    public void visit(XMLExists obj) {
+    	markInvalid(obj, "Pushdown of XMLExists not allowed"); //$NON-NLS-1$
+    }
+    
+    public void visit(XMLCast xmlCast) {
+    	markInvalid(xmlCast, "Pushdown of XMLCast not allowed"); //$NON-NLS-1$
+    }
+    
+    @Override
     public void visit(QueryString obj) {
     	markInvalid(obj, "Pushdown of QueryString not allowed"); //$NON-NLS-1$
     }
@@ -180,6 +189,19 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
     		markInvalid(windowFunction, "Window function distinct aggregate not supported by source"); //$NON-NLS-1$
             return;
     	}
+    	/* Some sources do not like this case. While we don't allow it to be entered directly,
+    	 * it can occur when raising a null node.
+    	 * TODO: support rewrites of the ordering/entire window function expression
+    	 */
+		OrderBy orderBy = windowFunction.getWindowSpecification().getOrderBy();
+		if (orderBy != null) {
+			for (OrderByItem item : orderBy.getOrderByItems()) {
+				if (EvaluatableVisitor.willBecomeConstant(SymbolMap.getExpression(item.getSymbol()))) {
+					markInvalid(windowFunction, "Window function order by constant not supported."); //$NON-NLS-1$
+		            return;			
+				}
+			}
+		}
     	try {
 	    	if (!CapabilitiesUtil.checkElementsAreSearchable(windowFunction.getWindowSpecification().getPartition(), metadata, SupportConstants.Element.SEARCHABLE_COMPARE)) {
 	    		markInvalid(windowFunction, "not all source columns support search type"); //$NON-NLS-1$
@@ -239,8 +261,9 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
                 operatorCap = Capability.CRITERIA_COMPARE_EQ;
                 break; 
             case CompareCriteria.LT: 
-            case CompareCriteria.GT: 
-                negated = true;
+            case CompareCriteria.GT:
+            	operatorCap = Capability.CRITERIA_COMPARE_ORDERED_EXCLUSIVE;
+            	break;
             case CompareCriteria.LE: 
             case CompareCriteria.GE: 
                 operatorCap = Capability.CRITERIA_COMPARE_ORDERED;
@@ -249,8 +272,15 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
 
         // Check if compares are allowed
         if(! this.caps.supportsCapability(operatorCap)) {
-            markInvalid(obj, operatorCap + " CompareCriteria not supported by source"); //$NON-NLS-1$
-            return;
+        	boolean unsupported = true;
+        	if (operatorCap == Capability.CRITERIA_COMPARE_ORDERED_EXCLUSIVE 
+        			&& this.caps.supportsCapability(Capability.CRITERIA_COMPARE_ORDERED) && this.caps.supportsCapability(Capability.CRITERIA_NOT)) {
+    			unsupported = false;
+        	}
+        	if (unsupported) {
+	            markInvalid(obj, operatorCap + " CompareCriteria not supported by source"); //$NON-NLS-1$
+	            return;
+        	}
         }                       
         if (negated && !this.caps.supportsCapability(Capability.CRITERIA_NOT)) {
         	markInvalid(obj, "Negation is not supported by source"); //$NON-NLS-1$
@@ -259,8 +289,12 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
         
         // Check capabilities of the elements
         try {
-            checkElementsAreSearchable(obj.getLeftExpression(), SupportConstants.Element.SEARCHABLE_COMPARE);                                
-            checkElementsAreSearchable(obj.getRightExpression(), SupportConstants.Element.SEARCHABLE_COMPARE);
+        	int support = SupportConstants.Element.SEARCHABLE_COMPARE;
+        	if (!negated && obj.getOperator() == CompareCriteria.EQ) {
+        		support = SupportConstants.Element.SEARCHABLE_EQUALITY;
+        	}
+            checkElementsAreSearchable(obj.getLeftExpression(), support);                                
+            checkElementsAreSearchable(obj.getRightExpression(), support);
         } catch(QueryMetadataException e) {
             handleException(new TeiidComponentException(e));
         } catch(TeiidComponentException e) {
@@ -584,6 +618,12 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
                 if(! CapabilitiesUtil.supports(Capability.QUERY_SUBQUERIES_CORRELATED, critNodeModelID, metadata, capFinder)) {
                     return null;
                 }
+                if (!CapabilitiesUtil.supports(Capability.SUBQUERY_CORRELATED_LIMIT, critNodeModelID, metadata, capFinder)) { 
+    		    	QueryCommand command = (QueryCommand)subqueryContainer.getCommand();
+    		    	if (command.getLimit() != null && !command.getLimit().isImplicit()) {
+    		    		return null;
+    		    	}
+        		}
                 //TODO: this check sees as correlated references as coming from the containing scope
                 //but this is only an issue with deeply nested subqueries
                 if (!CriteriaCapabilityValidatorVisitor.canPushLanguageObject(subqueryContainer.getCommand(), critNodeModelID, metadata, capFinder, analysisRecord )) {
@@ -594,6 +634,14 @@ public class CriteriaCapabilityValidatorVisitor extends LanguageVisitor {
             }
         } catch(QueryMetadataException e) {
              throw new TeiidComponentException(QueryPlugin.Event.TEIID30271, e);
+        }
+        
+        if (!CapabilitiesUtil.supports(Capability.SUBQUERY_COMMON_TABLE_EXPRESSIONS, critNodeModelID, metadata, capFinder) 
+        		&& subqueryContainer.getCommand() instanceof QueryCommand) {
+        	QueryCommand command = (QueryCommand)subqueryContainer.getCommand();
+        	if (command.getWith() != null) {
+        		return null;
+        	}
         }
 
         // Found no reason why this node is not eligible

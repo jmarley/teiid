@@ -27,6 +27,7 @@ import static org.teiid.query.processor.TestProcessor.*;
 
 import java.io.FileInputStream;
 import java.io.InputStreamReader;
+import java.io.StringReader;
 import java.nio.charset.Charset;
 import java.sql.Blob;
 import java.sql.Timestamp;
@@ -37,10 +38,15 @@ import java.util.TimeZone;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 
+import javax.xml.stream.XMLEventReader;
+import javax.xml.stream.XMLInputFactory;
+import javax.xml.transform.stax.StAXSource;
+
 import org.junit.AfterClass;
 import org.junit.BeforeClass;
 import org.junit.Test;
 import org.teiid.api.exception.query.ExpressionEvaluationException;
+import org.teiid.api.exception.query.QueryParserException;
 import org.teiid.client.util.ResultsFuture;
 import org.teiid.common.buffer.BufferManagerFactory;
 import org.teiid.core.TeiidProcessingException;
@@ -50,19 +56,27 @@ import org.teiid.core.types.BlobImpl;
 import org.teiid.core.types.BlobType;
 import org.teiid.core.types.DataTypeManager;
 import org.teiid.core.types.InputStreamFactory;
+import org.teiid.core.types.XMLType;
+import org.teiid.core.types.XMLType.Type;
 import org.teiid.core.util.ObjectConverterUtil;
+import org.teiid.core.util.PropertiesUtils;
 import org.teiid.core.util.TimestampWithTimezone;
 import org.teiid.core.util.UnitTestUtil;
 import org.teiid.metadata.MetadataStore;
 import org.teiid.metadata.Schema;
 import org.teiid.metadata.Table;
 import org.teiid.query.mapping.relational.QueryNode;
+import org.teiid.query.metadata.QueryMetadataInterface;
 import org.teiid.query.metadata.TransformationMetadata;
+import org.teiid.query.optimizer.capabilities.CapabilitiesFinder;
 import org.teiid.query.optimizer.capabilities.DefaultCapabilitiesFinder;
+import org.teiid.query.parser.QueryParser;
+import org.teiid.query.sql.lang.Command;
 import org.teiid.query.sql.symbol.Expression;
 import org.teiid.query.unittest.RealMetadataFactory;
 import org.teiid.query.unittest.TimestampUtil;
 import org.teiid.query.util.CommandContext;
+import org.teiid.util.StAXSQLXML;
 
 @SuppressWarnings({"nls", "unchecked"})
 public class TestSQLXMLProcessing {
@@ -127,6 +141,17 @@ public class TestSQLXMLProcessing {
         List<?>[] expected = new List<?>[] {
         		Arrays.asList("<x><e2>1</e2><val>1</val></x>"), //note e1 is not present, because it's null
         		Arrays.asList("<x><e1>a</e1><e2>0</e2><val>1</val></x>"),
+        };    
+    
+        process(sql, expected);
+    }
+    
+    @Test public void testXmlElementWithForestView() throws Exception {
+        String sql = "SELECT xmlelement(x, xmlforest(x, y, '1' as val)) from (select e1 as x, e2 as y from pm1.g1) a order by x, y limit 2"; //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] {
+        		Arrays.asList("<x><y>1</y><val>1</val></x>"), //note e1 is not present, because it's null
+        		Arrays.asList("<x><x>a</x><y>0</y><val>1</val></x>"),
         };    
     
         process(sql, expected);
@@ -268,6 +293,21 @@ public class TestSQLXMLProcessing {
         process(sql, expected);
     }
     
+    @Test(expected=QueryParserException.class) public void testXmlTableWithComplexIdentifier() throws Exception {
+        String sql = "select * from xmltable('/a/b' passing convert('<a><b>first</b><b x=\"attr\">second</b></a>', xml) columns \"x.y\" string path '@x', val string path '/.') as x"; //$NON-NLS-1$
+        
+        QueryParser.getQueryParser().parseCommand(sql);
+    }
+    
+    @Test public void testXmlTableNull() throws Exception {
+        String sql = "select * from xmltable('/a/b' passing convert(null, xml) columns x string path '@x', val string path '/.') as x"; //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] {
+        };    
+    
+        process(sql, expected);
+    }
+    
     @Test(expected=TeiidProcessingException.class) public void testXmlTableSequence() throws Exception {
         String sql = "select * from xmltable('/a' passing convert('<a><b>first</b><b x=\"attr\">second</b></a>', xml) columns x string path 'b') as x"; //$NON-NLS-1$
         
@@ -295,6 +335,16 @@ public class TestSQLXMLProcessing {
         process(sql, expected);
     }
     
+    @Test public void testXmlTableBOM() throws Exception {
+        String sql = "select * from xmltable('/a' passing xmlparse(document X'EFBBBF" + PropertiesUtils.toHex("<a/>".getBytes("UTF-8")) + "' wellformed)) as x"; //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] {
+        		Arrays.asList("<a/>"),
+        };    
+    
+        process(sql, expected);
+    }
+    
     @Test public void testXsiNil() throws Exception {
         String sql = "select * from xmltable('/a/b' passing convert('<a xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"><b xsi:nil=\"true\" xsi:type=\"xs:int\"/><b>1</b></a>', xml) columns val integer path '.') as x"; //$NON-NLS-1$
         
@@ -310,6 +360,16 @@ public class TestSQLXMLProcessing {
         String sql = "select * from xmltable('/a/b' passing convert('<a><b>first</b><b x=\"attr\">second</b></a>', xml) columns x blob path '@x', val string path '/.') as x"; //$NON-NLS-1$
         
         process(sql, null);
+    }
+    
+    @Test public void testXmlTableNumeric() throws Exception {
+        String sql = "select * from xmltable('/a' passing convert('<a s=\"1\" d=\"2.0\" l=\"12345678901\"/>', xml) columns x short path '@s', x1 double path '@d', z long path '@l') as x"; //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] {
+        		Arrays.asList((short)1, 2.0, 12345678901l)
+        };    
+    
+        process(sql, expected);
     }
     
     @Test public void testXmlTableDateTime() throws Exception {
@@ -394,11 +454,11 @@ public class TestSQLXMLProcessing {
     }
     
     @Test public void testXmlTableReturnXml() throws Exception {
-        String sql = "select * from xmltable('/a/b' passing convert('<a><b>first</b><b x=\"1\">second</b></a>', xml) columns val xml path '.') as x"; //$NON-NLS-1$
+    	String sql = "select * from xmltable('/*:a/*:b' passing convert('<a xmlns=\"http:foo\"><b>first</b><b xmlns=\"\" x=\"1\">second</b></a>', xml) columns val xml path '.') as x"; //$NON-NLS-1$
         
         List<?>[] expected = new List<?>[] {
-        		Arrays.asList("<b xmlns=\"\">first</b>"),
-        		Arrays.asList("<b xmlns=\"\" x=\"1\">second</b>"),
+        		Arrays.asList("<b xmlns=\"http:foo\">first</b>"),
+        		Arrays.asList("<b x=\"1\">second</b>"),
         };    
     
         process(sql, expected);
@@ -458,6 +518,26 @@ public class TestSQLXMLProcessing {
         process(sql, expected);
     }
     
+    @Test public void testXmlExists() throws Exception {
+        String sql = "select xmlexists('for $i in (1 to 1) return $i'), xmlexists('for $i in (1 to 0) return $i')"; //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] {
+        		Arrays.asList(true, false),
+        };    
+    
+        process(sql, expected);
+    }
+    
+    @Test public void testXmlQueryNull() throws Exception {
+        String sql = "select xmlquery('/a' passing cast(null as xml))"; //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] {
+        		Collections.singletonList(null),
+        };    
+    
+        process(sql, expected);
+    }
+    
     @Test public void testXmlQueryEmptyNull() throws Exception {
     	String sql = "select xmlquery('/a' passing xmlparse(document '<x/>') null on empty)"; //$NON-NLS-1$
         
@@ -482,7 +562,7 @@ public class TestSQLXMLProcessing {
     	String sql = "select xmlquery('/a/b' passing xmlparse(document '<a><b x=''1''/><b x=''2''/></a>') null on empty)"; //$NON-NLS-1$
         
         List<?>[] expected = new List<?>[] {
-        		Arrays.asList("<b xmlns=\"\" x=\"1\"/><b xmlns=\"\" x=\"2\"/>")
+        		Arrays.asList("<b x=\"1\"/><b x=\"2\"/>")
         };    
     
         process(sql, expected);
@@ -492,8 +572,8 @@ public class TestSQLXMLProcessing {
     	String sql = "select xmlserialize(x.object_value as string), y.x from xmltable('/a/b' passing xmlparse(document '<a><b x=''1''/><b x=''2''/></a>')) as x, (select 1 as x) as y"; //$NON-NLS-1$
         
         final List<?>[] expected = new List<?>[] {
-        		Arrays.asList("<b xmlns=\"\" x=\"1\"/>", 1),
-        		Arrays.asList("<b xmlns=\"\" x=\"2\"/>", 1)
+        		Arrays.asList("<b x=\"1\"/>", 1),
+        		Arrays.asList("<b x=\"2\"/>", 1)
         };    
     
         executeStreaming(sql, expected, -1);
@@ -601,6 +681,16 @@ public class TestSQLXMLProcessing {
         
         List<?>[] expected = new List<?>[] {
         		Arrays.asList("a<a/>")
+        };    
+    
+        process(sql, expected);
+    }
+    
+    @Test public void testXmlParseBOM() throws Exception {
+    	String sql = "select xmlparse(content X'EFBBBF" + PropertiesUtils.toHex("<a/>".getBytes("UTF-8")) + "')"; //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] {
+        		Arrays.asList("﻿<a/>")
         };    
     
         process(sql, expected);
@@ -734,7 +824,7 @@ public class TestSQLXMLProcessing {
         String sql = "SELECT XMLELEMENT(NAME metadata, XMLFOREST(e1), (SELECT XMLAGG(XMLELEMENT(NAME subTypes, XMLFOREST(e1))) FROM pm1.g2 AS b WHERE b.e1 = a.e1)) FROM pm1.g1 AS a where e1 = 'a' GROUP BY e1"; //$NON-NLS-1$
         
         List<?>[] expected = new List<?>[] {
-        		Arrays.asList("<metadata><gcol0>a</gcol0><subTypes><e1>a</e1></subTypes><subTypes><e1>a</e1></subTypes><subTypes><e1>a</e1></subTypes></metadata>"),
+        		Arrays.asList("<metadata><e1>a</e1><subTypes><e1>a</e1></subTypes><subTypes><e1>a</e1></subTypes><subTypes><e1>a</e1></subTypes></metadata>"),
         };    
     
         process(sql, expected);
@@ -754,10 +844,69 @@ public class TestSQLXMLProcessing {
 		processPreparedStatement(sql, expected, dataManager, new DefaultCapabilitiesFinder(), RealMetadataFactory.example1Cached(), Arrays.asList(b));
 	}
 	
+	@Test public void testStaxComment() throws Exception {
+		String sql = "select * from xmltable('/*:Person/phoneNumber' passing cast(? as xml) columns x string path 'type', y string path 'number') as x"; //$NON-NLS-1$
+
+		List<?>[] expected = new List<?>[] {
+        		Arrays.asList(null, "8881112222"),
+        };    
+    
+		XMLInputFactory factory = XMLInputFactory.newFactory();
+		XMLEventReader reader = factory.createXMLEventReader(new StringReader("<Person><!--hello--><phoneNumber><number>8881112222</number></phoneNumber></Person>"));
+		XMLType value = new XMLType(new StAXSQLXML(new StAXSource(reader)));
+		value.setType(Type.DOCUMENT);
+		Command command = helpParse(sql);   
+        CommandContext context = createCommandContext();
+        QueryMetadataInterface metadata = RealMetadataFactory.example1Cached();
+        context.setMetadata(metadata);        
+        CapabilitiesFinder capFinder = new DefaultCapabilitiesFinder();
+        ProcessorPlan plan = helpGetPlan(command, metadata, capFinder, context);
+        setParameterValues(Arrays.asList(value), command, context);
+		doProcess(plan, dataManager, expected, context);
+	}
+	
 	@Test(expected=ExpressionEvaluationException.class) public void testExternalEntityResolving() throws Exception {
 		String sql = "SELECT xmlelement(foo, '<bar>', convert('<?xml version=\"1.0\" encoding=\"UTF-8\"?><!DOCTYPE foo [<!ENTITY xxe SYSTEM \"file:///etc/passwd\">]><bar1>&xxe;</bar1>', xml))"; //$NON-NLS-1$
         
         process(sql, null);
 	}
+	
+	@Test public void testXmlText() throws Exception {
+		String sql = "SELECT xmlserialize(xmltext('foo&bar') as string)"; //$NON-NLS-1$
+        
+		List<?>[] expected = new List<?>[] {
+        		Arrays.asList("foo&amp;bar"),
+        }; 
+		
+        process(sql, expected);
+	}
+	
+	@Test(expected=TeiidProcessingException.class) public void testInvalidXmlComment() throws Exception {
+		String sql = "SELECT xmlcomment('--')"; //$NON-NLS-1$
+        
+        process(sql, null);
+	}
+	
+    @Test public void testXmlCast() throws Exception {
+    	String sql = "select xmlcast(xmlquery('/a/b' passing convert('<a><b>1</b></a>', xml)) as integer)"; //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] {
+        		Collections.singletonList(1),
+        };    
+        
+        assertEquals("SELECT XMLCAST(XMLQUERY('/a/b' PASSING convert('<a><b>1</b></a>', xml)) AS integer)", TestProcessor.helpParse(sql).toString());
+    
+        process(sql, expected);
+    }
+    
+    @Test public void testXmlCast1() throws Exception {
+    	String sql = "select xmlcast(cast('2000-01-01 00:00:00' as timestamp) as xml)"; //$NON-NLS-1$
+        
+        List<?>[] expected = new List<?>[] {
+        		Collections.singletonList("2000-01-01T06:00:00Z"),
+        };    
+        
+        process(sql, expected);
+    }
     
 }

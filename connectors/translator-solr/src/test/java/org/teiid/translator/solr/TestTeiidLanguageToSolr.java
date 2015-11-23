@@ -25,11 +25,19 @@ import static org.junit.Assert.*;
 
 import java.io.IOException;
 import java.net.URLDecoder;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.util.Calendar;
+import java.util.Date;
+import java.util.TimeZone;
 
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 import org.teiid.cdk.CommandBuilder;
 import org.teiid.cdk.api.TranslationUtility;
 import org.teiid.core.util.ObjectConverterUtil;
+import org.teiid.core.util.TimestampWithTimezone;
 import org.teiid.core.util.UnitTestUtil;
 import org.teiid.language.Command;
 import org.teiid.language.Select;
@@ -73,7 +81,7 @@ public class TestTeiidLanguageToSolr {
 	@Test
 	public void testSelectStar() throws Exception {
 		// column test, all columns translates to price, weight and popularity
-		assertEquals("fl=price,weight,popularity,name,purchasedate&q=*:*", getSolrTranslation("select * from example"));
+		assertEquals("fl=price,weight,popularity,name,purchasets,purchasetime,purchasedate,nis&q=*:*", getSolrTranslation("select * from example"));
 	}
 
 	@Test
@@ -86,6 +94,12 @@ public class TestTeiidLanguageToSolr {
 		assertEquals("fl=price,weight,popularity&q=price:1.0", 
 				getSolrTranslation("select price,weight,popularity from example where price=1"));
 	}
+	
+	@Test
+	public void testSelectWhereEQNegitive() throws Exception {
+		assertEquals("fl=price,weight,popularity&q=price:\\-1.0", 
+				getSolrTranslation("select price,weight,popularity from example where price=-1"));
+	}	
 
 	@Test
 	public void testSelectWhereNE() throws Exception {
@@ -240,13 +254,41 @@ public class TestTeiidLanguageToSolr {
 		assertEquals("fl=name,popularity&sort=popularity asc&q=*:*",
 				getSolrTranslation("select name,popularity from example order by popularity ASC"));
 	}
+	
+	@Test
+	public void testOrderByWithAlias() throws Exception {
+		assertEquals("fl=name,popularity&sort=popularity asc&q=*:*",
+				getSolrTranslation("select name as c_0,popularity c_1 from example order by c_1 ASC"));
+	}
+	
 	 
 	@Test
-	public void testDateField() throws Exception {
-		assertTrue(getSolrTranslation(
-				"select name,purchasedate from example where purchasedate = {ts '2014-01-06 11:52:07'}")
-				.startsWith("fl=name,purchasedate&q=purchasedate:2014-01-06T11-52-07:000"));
+	public void testTimestampField() throws Exception {
+	    Date d = getTestDate();
+		assertEquals("fl=name,purchasedate&q=purchasets:2014\\-02\\-06T19\\:52\\:07\\:000Z",
+		        getSolrTranslation("select name,purchasedate from example where purchasets = {ts '"+new Timestamp(d.getTime())+"'}"));
 	}
+
+	@Test
+    public void testDateField() throws Exception {
+        Date d = getTestDate();
+        assertEquals("fl=name,purchasedate&q=purchasedate:2014\\-02\\-06T08\\:00\\:00\\:000Z",
+                getSolrTranslation("select name,purchasedate from example where purchasedate = {d '"+new java.sql.Date(d.getTime())+"'}"));
+    }
+	
+    @Test
+    public void testTimeField() throws Exception {
+        Date d = getTestDate();
+        assertEquals("fl=name,purchasedate&q=purchasetime:1970\\-01\\-01T19\\:52\\:07\\:000Z",
+                getSolrTranslation("select name,purchasedate from example where purchasetime = {t '"+new Time(d.getTime())+"'}"));
+    }
+
+    private Date getTestDate() {
+        Calendar c = TimestampWithTimezone.getCalendar();
+        c.setTimeInMillis(0);
+        c.set(2014, 1, 6, 11, 52, 07);
+        return c.getTime();
+    }
 	
 	@Test
 	public void testFunction() throws Exception {
@@ -258,6 +300,14 @@ public class TestTeiidLanguageToSolr {
 	public void testNestedFunction() throws Exception {
 		assertEquals("fl=name,div(sum(popularity,1),2)&sort=popularity asc&q=*:*",
 				getSolrTranslation("select name,(popularity+1)/2 as x from example order by popularity ASC"));		
-	}	
+	}
+	
+	@Before public void setUp() { 
+		TimestampWithTimezone.resetCalendar(TimeZone.getTimeZone("PST")); //$NON-NLS-1$ 
+	}
+	
+	@After public void tearDown() { 
+		TimestampWithTimezone.resetCalendar(null);
+	}
 
 }

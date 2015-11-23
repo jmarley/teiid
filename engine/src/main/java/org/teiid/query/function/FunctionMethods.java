@@ -49,6 +49,9 @@ import java.util.Locale;
 import java.util.Properties;
 import java.util.TimeZone;
 import java.util.UUID;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
 
 import org.teiid.api.exception.query.ExpressionEvaluationException;
 import org.teiid.api.exception.query.FunctionExecutionException;
@@ -74,6 +77,7 @@ import org.teiid.query.QueryPlugin;
 import org.teiid.query.function.metadata.FunctionCategoryConstants;
 import org.teiid.query.metadata.MaterializationMetadataRepository;
 import org.teiid.query.util.CommandContext;
+import org.teiid.translator.SourceSystemFunctions;
 
 /**
  * Static method hooks for most of the function library.
@@ -84,11 +88,22 @@ public final class FunctionMethods {
 
 	// ================== Function = plus =====================
 
-	public static int plus(int x, int y) {
-		return x + y;
+	public static int plus(int x, int y) throws FunctionExecutionException {
+		long result = (long)x + y;
+		if (result > Integer.MAX_VALUE || result < Integer.MIN_VALUE) {
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, result));
+		}
+		return (int)result;
 	}
 	
-	public static long plus(long x, long y) {
+	public static long plus(long x, long y) throws FunctionExecutionException {
+		if (y > 0) {
+			if (x > Long.MAX_VALUE - y) {
+				throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, BigInteger.valueOf(x).add(BigInteger.valueOf(y))));
+			}
+		} else if (x < Long.MIN_VALUE - y) {
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, BigInteger.valueOf(x).add(BigInteger.valueOf(y))));
+		}
 		return x + y;
 	}
 	
@@ -110,11 +125,22 @@ public final class FunctionMethods {
 
 	// ================== Function = minus =====================
 
-	public static int minus(int x, int y) {
-		return x - y;
+	public static int minus(int x, int y) throws FunctionExecutionException {
+		long result = (long)x - y;
+		if (result > Integer.MAX_VALUE || result < Integer.MIN_VALUE) {
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, result));
+		}
+		return (int)result;
 	}
 	
-	public static long minus(long x, long y) {
+	public static long minus(long x, long y) throws FunctionExecutionException {
+		if (y > 0) {
+			if (x < Long.MIN_VALUE + y) {
+				throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, BigInteger.valueOf(x).subtract(BigInteger.valueOf(y))));
+			}
+		} else if (x > Long.MAX_VALUE + y) {
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, BigInteger.valueOf(x).subtract(BigInteger.valueOf(y))));
+	    } 
 		return x - y;
 	}
 	
@@ -136,11 +162,20 @@ public final class FunctionMethods {
 
 	// ================== Function = multiply =====================
 
-	public static int multiply(int x, int y) {
-		return x * y;
+	public static int multiply(int x, int y) throws FunctionExecutionException {
+		long result = (long)x * y;
+		if (result > Integer.MAX_VALUE || result < Integer.MIN_VALUE) {
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, result));
+		}
+		return (int)result;
 	}
 	
-	public static long multiply(long x, long y) {
+	public static long multiply(long x, long y) throws FunctionExecutionException {
+		if ((y > 0 && (x > Long.MAX_VALUE/y || x < Long.MIN_VALUE/y))
+				|| ((y < -1) && (x > Long.MIN_VALUE/y || x < Long.MAX_VALUE/y))
+				|| (y == -1 && x == Long.MIN_VALUE)) {
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, BigInteger.valueOf(x).multiply(BigInteger.valueOf(y))));
+		}
 		return x * y;
 	}
 	
@@ -162,11 +197,17 @@ public final class FunctionMethods {
 
 	// ================== Function = divide =====================
 
-	public static int divide(int x, int y) {
+	public static int divide(int x, int y) throws FunctionExecutionException {
+		if (x == Integer.MIN_VALUE && y == -1) {
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, (long)Integer.MAX_VALUE + 1));
+		}
 		return x / y;
 	}
 	
-	public static long divide(long x, long y) {
+	public static long divide(long x, long y) throws FunctionExecutionException {
+		if (x == Long.MIN_VALUE && y == -1) {
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, BigInteger.valueOf(Long.MAX_VALUE).add(BigInteger.valueOf(1))));
+		}
 		return x / y;
 	}
 	
@@ -195,11 +236,17 @@ public final class FunctionMethods {
 
 	// ================== Function = abs =====================
 
-	public static int abs(int x) {
+	public static int abs(int x) throws FunctionExecutionException {
+		if (x == Integer.MIN_VALUE) {
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, (long)Integer.MAX_VALUE + 1));
+		}
 		return Math.abs(x);
 	}
 	
-	public static long abs(long x) {
+	public static long abs(long x) throws FunctionExecutionException {
+		if (x == Long.MIN_VALUE) {
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31169, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31169, BigInteger.valueOf(Long.MAX_VALUE).add(BigInteger.valueOf(1))));
+		}
 		return Math.abs(x);
 	}
 	
@@ -428,11 +475,6 @@ public final class FunctionMethods {
 
 	public static int dayOfWeek(Date x) {
 		int result = getField(x, Calendar.DAY_OF_WEEK);
-		if (TimestampWithTimezone.ISO8601_WEEK) {
-			//technically this is just pg indexing
-			//iso would use sunday = 7 rather than 0
-			return (result + 6) % 7;
-		}
 		return result;
 	}
 
@@ -1486,16 +1528,14 @@ public final class FunctionMethods {
 		 throw new FunctionExecutionException(QueryPlugin.Event.TEIID30416, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30416, array.getClass()));
 	}
 	
-	@TeiidFunction(category=FunctionCategoryConstants.SYSTEM, determinism=Determinism.NONDETERMINISTIC)
+	@TeiidFunction(category=FunctionCategoryConstants.SYSTEM, determinism = Determinism.COMMAND_DETERMINISTIC)
 	public static int mvstatus(CommandContext context, String schemaName, String viewName, Boolean validity, String status, String action) throws BlockedException, FunctionExecutionException {
-		if (!validity) {
+		if (!validity && !MaterializationMetadataRepository.ErrorAction.IGNORE.name().equalsIgnoreCase(action)) {
 			if (MaterializationMetadataRepository.ErrorAction.THROW_EXCEPTION.name().equalsIgnoreCase(action)) {
 				throw new FunctionExecutionException(QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31147, schemaName, viewName));
 			}
-			if (MaterializationMetadataRepository.ErrorAction.WAIT.name().equalsIgnoreCase(action)){
-				context.getWorkItem().scheduleWork(30000);
-				throw BlockedException.INSTANCE;
-			}
+			context.getWorkItem().scheduleWork(10000);
+			throw BlockedException.INSTANCE;
 		}
 		return 1;
 	}	
@@ -1505,5 +1545,99 @@ public final class FunctionMethods {
 		List<String> tokens = StringUtil.tokenize(str, delimiter);
 		return tokens.toArray(new String[tokens.size()]);
 	}
-	
+
+    /**
+     * Perform find-replace operation on a string using regular expressions.
+     *
+     * See {@link java.util.regex.Pattern} for more information.
+     *
+     * @param context
+     * @param source Value to perform replacement on.
+     * @param regex Regular expression pattern.
+     * @param replacement Replacement string.
+     * @return Modified source if the pattern was matched, otherwise source.
+     * @throws FunctionExecutionException If regex pattern was invalid.
+     */
+    @TeiidFunction(name=SourceSystemFunctions.REGEXP_REPLACE,
+                   category=FunctionCategoryConstants.STRING,
+                   nullOnNull=true)
+    public static String regexpReplace(CommandContext context,
+                                       String source,
+                                       String regex,
+                                       String replacement)
+            throws FunctionExecutionException {
+        return regexpReplace(context, source, regex, replacement, ""); //$NON-NLS-1$
+    }
+
+    /**
+     * Perform find-replace operation on a string using regular expressions.
+     *
+     * See {@link java.util.regex.Pattern} for more information.
+     *
+     * Flags can be used to modify the matching behavior of the regular expression.
+     * <ul>
+     *   <li>g - Replaces all matches instead of just the first.</li>
+     *   <li>i - Performs case insensitive pattern match.</li>
+     *   <li>m - Changes behavior of "^" and "$" to match the beginning and end
+     *           of the line instead of the entire string.</li>
+     * </ul>
+     *
+     * @param context
+     * @param source Value to perform replacement on.
+     * @param regex Regular expression pattern.
+     * @param replacement Replacement string.
+     * @param flags Flags to modify behavior of the pattern.
+     * @return Modified source if the pattern was matched, otherwise source.
+     * @throws FunctionExecutionException If an invalid flag was supplied or if the
+     *                                    regex pattern was invalid.
+     */
+    @TeiidFunction(name=SourceSystemFunctions.REGEXP_REPLACE,
+                   category=FunctionCategoryConstants.STRING,
+                   nullOnNull=true)
+    public static String regexpReplace(CommandContext context,
+                                       String source,
+                                       String regex,
+                                       String replacement,
+                                       String flags)
+            throws FunctionExecutionException {
+        
+        // Parse regex flags into a bitmask for Pattern API.
+        // Exception is the 'g' flag which makes us call replaceAll instead of
+        // replaceFirst.
+        boolean global = false;
+        int bitFlags = 0;
+
+        for (int i = 0; i < flags.length(); ++i) {
+            char c = flags.charAt(i);
+            if (c == 'g') {
+                // Global match.
+                global = true;
+            } else if (c == 'i') {
+                // Case insensitive match.
+                bitFlags |= Pattern.CASE_INSENSITIVE;
+            } else if (c == 'm') {
+                // Change ^$ to match line endings instad of entire source.
+                bitFlags |= Pattern.MULTILINE;
+            } else {
+                throw new FunctionExecutionException(QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31168, c));
+            }
+        }
+        
+        // Compile regex into pattern and do replacement.
+        Pattern pattern;
+        try {
+            pattern = CommandContext.getPattern(context, regex, bitFlags);
+        } catch (PatternSyntaxException e) {
+            throw new FunctionExecutionException(e);
+        }
+        Matcher matcher = pattern.matcher(source);
+        String result;
+        if (global) {
+            result = matcher.replaceAll(replacement);
+        } else {
+            result = matcher.replaceFirst(replacement);
+        }
+
+        return result;
+    }
 }

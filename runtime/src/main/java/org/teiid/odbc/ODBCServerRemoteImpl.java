@@ -48,8 +48,8 @@ import org.teiid.adminapi.impl.SessionMetadata;
 import org.teiid.client.RequestMessage.ResultsMode;
 import org.teiid.client.security.ILogon;
 import org.teiid.client.security.LogonException;
-import org.teiid.client.security.LogonResult;
 import org.teiid.client.util.ResultsFuture;
+import org.teiid.core.TeiidProcessingException;
 import org.teiid.core.util.ApplicationInfo;
 import org.teiid.core.util.StringUtil;
 import org.teiid.deployers.PgCatalogMetadataStore;
@@ -61,11 +61,13 @@ import org.teiid.jdbc.StatementImpl;
 import org.teiid.jdbc.TeiidDriver;
 import org.teiid.logging.LogConstants;
 import org.teiid.logging.LogManager;
+import org.teiid.net.TeiidURL;
 import org.teiid.net.socket.AuthenticationType;
 import org.teiid.net.socket.SocketServerConnection;
 import org.teiid.odbc.PGUtil.PgColInfo;
 import org.teiid.query.parser.SQLParserUtil;
 import org.teiid.runtime.RuntimePlugin;
+import org.teiid.security.GSSResult;
 import org.teiid.transport.LocalServerConnection;
 import org.teiid.transport.LogonImpl;
 import org.teiid.transport.ODBCClientInstance;
@@ -227,7 +229,7 @@ public class ODBCServerRemoteImpl implements ODBCServerRemote {
 	public void logon(String databaseName, String user, NullTerminatedStringDataInputStream data, SocketAddress remoteAddress) {
 		try {
 			java.util.Properties info = new java.util.Properties();
-			info.put("user", user); //$NON-NLS-1$
+			info.put(TeiidURL.CONNECTION.USER_NAME, user); 
 			
 			AuthenticationType authType = getAuthenticationType(user, databaseName);
 			
@@ -237,11 +239,15 @@ public class ODBCServerRemoteImpl implements ODBCServerRemote {
 			}
 			else if (authType.equals(AuthenticationType.GSS)) {
 				byte[] serviceToken = data.readServiceToken();
-            	LogonResult result = this.logon.neogitiateGssLogin(this.props, serviceToken, false);
-            	serviceToken = (byte[])result.getProperty(ILogon.KRB5TOKEN);
-            	if (Boolean.TRUE.equals(result.getProperty(ILogon.KRB5_ESTABLISHED))) {
+            	GSSResult result = this.logon.neogitiateGssLogin(serviceToken, databaseName, null, user);
+            	serviceToken = result.getServiceToken();
+            	if (result.isAuthenticated()) {
                 	info.put(ILogon.KRB5TOKEN, serviceToken);
-                	info.put(GSSCredential.class.getName(), result.getProperty(GSSCredential.class.getName()));
+                	this.client.authenticationGSSContinue(serviceToken);
+                	// if delegation is in progress, participate in it.
+                	if (result.getDelegationCredential() != null) {
+                		info.put(GSSCredential.class.getName(), result.getDelegationCredential());
+                	}
             	}
             	else {
 	            	this.client.authenticationGSSContinue(serviceToken);
@@ -255,7 +261,7 @@ public class ODBCServerRemoteImpl implements ODBCServerRemote {
 			String url = "jdbc:teiid:"+databaseName+";ApplicationName=ODBC"; //$NON-NLS-1$ //$NON-NLS-2$
 
 			if (password != null) {
-				info.put("password", password); //$NON-NLS-1$
+				info.put(TeiidURL.CONNECTION.PASSWORD, password); 
 			}
 			
 			if (remoteAddress instanceof InetSocketAddress) {
@@ -272,6 +278,12 @@ public class ODBCServerRemoteImpl implements ODBCServerRemote {
 			while (keys.hasMoreElements()) {
 				String key = (String)keys.nextElement();
 				this.connection.setExecutionProperty(key, this.props.getProperty(key));
+			}
+			StatementImpl s = this.connection.createStatement();
+			try {
+				s.execute("select teiid_session_set('resolve_groupby_positional', true)"); //$NON-NLS-1$
+			} finally {
+				s.close();
 			}
 			this.client.authenticationSucess(hash, hash);
 			ready();
@@ -490,6 +502,9 @@ public class ODBCServerRemoteImpl implements ODBCServerRemote {
 				this.preparedMap.put(prepareName, prepared);
 				this.client.prepareCompleted(prepareName);
 			} catch (SQLException e) {
+				if (e.getCause() instanceof TeiidProcessingException) {
+					LogManager.logWarning(LogConstants.CTX_ODBC, e.getCause(), RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40020)); 
+				}
 				errorOccurred(e);
 			} finally {
 				try {
@@ -507,7 +522,10 @@ public class ODBCServerRemoteImpl implements ODBCServerRemote {
 		// An unnamed portal is destroyed at the end of the transaction, or as soon as 
 		// the next Bind statement specifying the unnamed portal as destination is issued. 
 		if (bindName == null || bindName.length() == 0) {
-			this.portalMap.remove(UNNAMED);
+			Portal p = this.portalMap.remove(UNNAMED);
+			if (p != null) {
+				closePortal(p);
+			}
 			bindName  = UNNAMED;
 		} else if (this.portalMap.get(bindName) != null || this.cursorMap.get(bindName) != null) {
 			errorOccurred(RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40111, bindName));
@@ -604,6 +622,12 @@ public class ODBCServerRemoteImpl implements ODBCServerRemote {
 		                	setEncoding();
 		                	doneExecuting();
 		                }
+                    } catch (ExecutionException e) {
+                    	if (e.getCause() != null) {
+                    		errorOccurred(e.getCause());
+                    	} else {
+                            errorOccurred(e);
+                    	}
                     } catch (Throwable e) {
                         errorOccurred(e);
                     }
@@ -739,7 +763,10 @@ public class ODBCServerRemoteImpl implements ODBCServerRemote {
 			return;
 		}
 		//46.2.3 Note that a simple Query message also destroys the unnamed portal.
-		this.portalMap.remove(UNNAMED);
+		Portal p = this.portalMap.remove(UNNAMED);
+		if (p != null) {
+			closePortal(p);
+		}
 		this.preparedMap.remove(UNNAMED);
 		query = query.trim();
 		if (query.length() == 0) {
@@ -1053,7 +1080,7 @@ public class ODBCServerRemoteImpl implements ODBCServerRemote {
 		final ArrayList<PgColInfo> result = new ArrayList<PgColInfo>(columns);
 		for (int i = 1; i <= columns; i++) {
 			final PgColInfo info = new PgColInfo();
-			info.name = meta.getColumnLabel(i).toLowerCase();
+			info.name = meta.getColumnLabel(i);
 			info.type = meta.getColumnType(i);
 			info.type = convertType(info.type);
 			info.precision = meta.getColumnDisplaySize(i);
@@ -1066,19 +1093,23 @@ public class ODBCServerRemoteImpl implements ODBCServerRemote {
 			String table = meta.getTableName(i);
 			String schema = meta.getSchemaName(i);
 			if (schema != null) {
-				final PreparedStatementImpl ps = this.connection.prepareStatement("select attrelid, attnum, typoid from matpg_relatt where attname = ? and relname = ? and nspname = ?"); //$NON-NLS-1$
-				ps.setString(1, name);
-				ps.setString(2, table);
-				ps.setString(3, schema);	
-				ResultSet rs = ps.executeQuery();
-				if (rs.next()) {
-					info.reloid = rs.getInt(1);
-					info.attnum = rs.getShort(2);
-					int specificType = rs.getInt(3);
-					if (!rs.wasNull()) {
-						info.type = specificType;
-					}
-				}					
+				final PreparedStatementImpl ps = this.connection.prepareStatement("select attrelid, attnum, typoid from pg_catalog.matpg_relatt where attname = ? and relname = ? and nspname = ?"); //$NON-NLS-1$
+				try {
+					ps.setString(1, name);
+					ps.setString(2, table);
+					ps.setString(3, schema);	
+					ResultSet rs = ps.executeQuery();
+					if (rs.next()) {
+						info.reloid = rs.getInt(1);
+						info.attnum = rs.getShort(2);
+						int specificType = rs.getInt(3);
+						if (!rs.wasNull()) {
+							info.type = specificType;
+						}
+					}	
+				} finally {
+					ps.close();
+				}
 			}
 			result.add(info);
 		}

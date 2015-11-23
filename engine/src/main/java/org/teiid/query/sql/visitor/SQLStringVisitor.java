@@ -24,13 +24,19 @@ package org.teiid.query.sql.visitor;
 
 import static org.teiid.language.SQLConstants.Reserved.*;
 
-import java.util.*;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.Iterator;
+import java.util.List;
+import java.util.Map;
 
 import org.teiid.core.types.ArrayImpl;
 import org.teiid.core.types.DataTypeManager;
+import org.teiid.core.util.PropertiesUtils;
 import org.teiid.core.util.StringUtil;
 import org.teiid.language.SQLConstants;
 import org.teiid.language.SQLConstants.NonReserved;
+import org.teiid.language.SQLConstants.Reserved;
 import org.teiid.language.SQLConstants.Tokens;
 import org.teiid.metadata.BaseColumn.NullType;
 import org.teiid.metadata.Column;
@@ -38,6 +44,7 @@ import org.teiid.query.metadata.DDLStringVisitor;
 import org.teiid.query.sql.LanguageObject;
 import org.teiid.query.sql.LanguageVisitor;
 import org.teiid.query.sql.lang.*;
+import org.teiid.query.sql.lang.Create.CommitAction;
 import org.teiid.query.sql.lang.ExistsCriteria.SubqueryHint;
 import org.teiid.query.sql.lang.ObjectTable.ObjectColumn;
 import org.teiid.query.sql.lang.Option.MakeDep;
@@ -397,7 +404,22 @@ public class SQLStringVisitor extends LanguageVisitor {
             }
             append(Tokens.RPAREN);
         }
-        append(")"); //$NON-NLS-1$
+        append(Tokens.RPAREN);
+        CommitAction commitAction = obj.getCommitAction();
+        if (commitAction != null) {
+        	append(Tokens.SPACE);
+        	append(Reserved.ON);
+        	append(Tokens.SPACE);
+        	append(Reserved.COMMIT);
+        	append(Tokens.SPACE);
+        	switch (commitAction) {
+        	case PRESERVE_ROWS:
+        		append(NonReserved.PRESERVE);
+        		append(Tokens.SPACE);
+        		append(Reserved.ROWS);
+        		break;
+        	}
+        }
     }
 
     @Override
@@ -484,8 +506,6 @@ public class SQLStringVisitor extends LanguageVisitor {
         if (obj.hasHint()) {
             append(")"); //$NON-NLS-1$
         }
-        
-        addMakeDep(obj);
     }
 
     private void addHintComment( FromClause obj ) {
@@ -496,16 +516,18 @@ public class SQLStringVisitor extends LanguageVisitor {
                 append(Option.OPTIONAL);
                 append(SPACE);
             }
-            if (obj.getMakeDep() != null && obj.getMakeDep().isSimple()) {
+            if (obj.getMakeDep() != null) {
                 append(Option.MAKEDEP);
+                appendMakeDepOptions(obj.getMakeDep());
                 append(SPACE);
             }
             if (obj.isMakeNotDep()) {
                 append(Option.MAKENOTDEP);
                 append(SPACE);
             }
-            if (obj.isMakeInd()) {
-                append(FromClause.MAKEIND);
+            if (obj.getMakeInd() != null) {
+                append(MAKEIND);
+                appendMakeDepOptions(obj.getMakeInd());
                 append(SPACE);
             }
             if (obj.isNoUnnest()) {
@@ -655,7 +677,7 @@ public class SQLStringVisitor extends LanguageVisitor {
 
 	public SQLStringVisitor appendMakeDepOptions(MakeDep makedep) {
 		boolean parens = false;
-		if (makedep.getMax() != null || makedep.isJoin()) {
+		if (makedep.getMax() != null || makedep.getJoin() != null) {
 			append(Tokens.LPAREN);
 			parens = true;
 		}
@@ -670,11 +692,15 @@ public class SQLStringVisitor extends LanguageVisitor {
 			append(Tokens.COLON);
 			append(makedep.getMax());
 		}
-		if (makedep.isJoin()) {
+		if (makedep.getJoin() != null) {
 			if (space) {
 				append(SPACE);
 			} else {
 				space = true;
+			}
+			if (!makedep.getJoin()) {
+				append(NO);
+				append(SPACE);
 			}
 			append(JOIN);
 		}
@@ -1150,6 +1176,16 @@ public class SQLStringVisitor extends LanguageVisitor {
             append(CacheHint.SCOPE);
             append(obj.getScope());            
         }
+        if (obj.getMinRows() != null) {
+        	if (!addParens) {
+                append(Tokens.LPAREN);
+                addParens = true;
+            } else {
+                append(SPACE);
+            }     
+            append(CacheHint.MIN);
+            append(obj.getMinRows());
+        }
         if (addParens) {
             append(Tokens.RPAREN);
         }
@@ -1169,7 +1205,6 @@ public class SQLStringVisitor extends LanguageVisitor {
         append(")");//$NON-NLS-1$
         append(" AS ");//$NON-NLS-1$
         append(escapeSinglePart(obj.getOutputName()));
-        addMakeDep(obj);
     }
 
     @Override
@@ -1194,7 +1229,6 @@ public class SQLStringVisitor extends LanguageVisitor {
     public void visit( UnaryFromClause obj ) {
         addHintComment(obj);
         visitNode(obj.getGroup());
-        addMakeDep(obj);
     }
 
     @Override
@@ -1322,6 +1356,25 @@ public class SQLStringVisitor extends LanguageVisitor {
 					Object value2 = av.getValues()[i];
 					outputLiteral(value2!=null?value2.getClass():av.getValues().getClass().getComponentType(), multiValued, value2);
 				}
+				if (av.getValues().length == 1) {
+					append(Tokens.COMMA);
+				}
+				append(Tokens.RPAREN);
+				return;
+			} else if (type.isArray()) {
+				append(Tokens.LPAREN);
+				int length = java.lang.reflect.Array.getLength(value);
+				for (int i = 0; i < length; i++) {
+					if (i > 0) {
+						append(Tokens.COMMA);
+						append(SPACE);
+					}
+					Object value2 = java.lang.reflect.Array.get(value, i);
+					outputLiteral(type.getComponentType(), multiValued, value2);
+				}
+				if (length == 1) {
+					append(Tokens.COMMA);
+				}
 				append(Tokens.RPAREN);
 				return;
 			}
@@ -1342,9 +1395,21 @@ public class SQLStringVisitor extends LanguageVisitor {
 		    	if (DataTypeManager.isLOB(type)) {
 		    		constantParts = new String[] {"?"}; //$NON-NLS-1$
 		    	} else {
-		            String strValue = value.toString();
-		            strValue = escapeStringValue(strValue, "'"); //$NON-NLS-1$
-		            constantParts = new String[] {"'", strValue, "'"}; //$NON-NLS-1$ //$NON-NLS-2$
+    				append('\'');
+    				String strValue = value.toString();
+		            for (int i = 0; i < strValue.length(); i++) {
+		    			char c = strValue.charAt(i);
+		    			if (c == '\'') {
+		    				parts.append('\'');
+		    			} else if (Character.isISOControl(c)) {
+		    				parts.append("\\u" + PropertiesUtils.toHex((c >> 12) & 0xF) + PropertiesUtils.toHex((c >>  8) & 0xF) //$NON-NLS-1$ 
+		    						+ PropertiesUtils.toHex((c >>  4) & 0xF) + PropertiesUtils.toHex(c & 0xF));
+		    				continue;
+		    			}
+		    			parts.append(c);
+		    		}
+    				parts.append('\'');
+		            return;
 		    	}
 		    }
 		}
@@ -1405,7 +1470,7 @@ public class SQLStringVisitor extends LanguageVisitor {
             // Hide this function, which is implicit
             visitNode(args[0]);
 
-        } else if (name.equalsIgnoreCase(CONVERT) || name.equalsIgnoreCase(CAST)) {
+        } else if (name.equalsIgnoreCase(CONVERT) || name.equalsIgnoreCase(CAST) || name.equalsIgnoreCase(XMLCAST)) {
             append(name);
             append("("); //$NON-NLS-1$
 
@@ -1784,14 +1849,21 @@ public class SQLStringVisitor extends LanguageVisitor {
         append(operator);
         append(SPACE);
         append(quantifier);
-        append("("); //$NON-NLS-1$
+        addSubqueryHint(obj.getSubqueryHint());
+        append(" ("); //$NON-NLS-1$
         visitNode(obj.getCommand());
         append(")"); //$NON-NLS-1$
     }
 
     @Override
     public void visit( ScalarSubquery obj ) {
-        // operator and beginning of list
+    	if (obj.getSubqueryHint().isDepJoin() || obj.getSubqueryHint().isMergeJoin() || obj.getSubqueryHint().isNoUnnest()) {
+	    	if (this.parts.charAt(this.parts.length()-1) == ' ') {
+	    		this.parts.setLength(this.parts.length() -1);
+	    	}
+	    	addSubqueryHint(obj.getSubqueryHint());
+	    	append(SPACE); 
+    	}
         append("("); //$NON-NLS-1$
         visitNode(obj.getCommand());
         append(")"); //$NON-NLS-1$
@@ -1941,7 +2013,7 @@ public class SQLStringVisitor extends LanguageVisitor {
         }
         append(SPACE);
         append(NonReserved.COLUMNS);
-
+        boolean noTrim = obj.isNoTrim();
         for (Iterator<TextColumn> cols = obj.getColumns().iterator(); cols.hasNext();) {
             TextColumn col = cols.next();
             append(SPACE);
@@ -1952,6 +2024,10 @@ public class SQLStringVisitor extends LanguageVisitor {
                 append(SPACE);
                 append(NonReserved.ORDINALITY);
             } else {
+	            if (col.getHeader() != null) {
+	            	outputLiteral(String.class, false, col.getHeader());
+	            	append(SPACE);
+	            }
 	            append(col.getType());
 	            if (col.getWidth() != null) {
 	                append(SPACE);
@@ -1959,7 +2035,7 @@ public class SQLStringVisitor extends LanguageVisitor {
 	                append(SPACE);
 	                append(col.getWidth());
 	            }
-	            if (col.isNoTrim()) {
+	            if (!noTrim && col.isNoTrim()) {
 	            	append(SPACE);
 	                append(NO);
 	                append(SPACE);
@@ -1985,6 +2061,13 @@ public class SQLStringVisitor extends LanguageVisitor {
             append(ROW);
         	append(SPACE);
             append(NonReserved.DELIMITER);
+        } else if (obj.getRowDelimiter() != null) {
+        	append(SPACE);
+            append(ROW);
+        	append(SPACE);
+            append(NonReserved.DELIMITER);
+            append(SPACE);
+            visitNode(new Constant(obj.getRowDelimiter()));
         }
         if (obj.getDelimiter() != null) {
             append(SPACE);
@@ -2016,12 +2099,17 @@ public class SQLStringVisitor extends LanguageVisitor {
             append(SPACE);
             append(obj.getSkip());
         }
+        if (noTrim) {
+        	append(SPACE);
+            append(NO);
+            append(SPACE);
+            append(NonReserved.TRIM);
+        }
         append(")");//$NON-NLS-1$
         append(SPACE);
         append(AS);
         append(SPACE);
         outputDisplayName(obj.getName());
-        addMakeDep(obj);
     }
 
     @Override
@@ -2077,7 +2165,6 @@ public class SQLStringVisitor extends LanguageVisitor {
         append(AS);
         append(SPACE);
         outputDisplayName(obj.getName());
-        addMakeDep(obj);
     }
 
     @Override
@@ -2122,7 +2209,6 @@ public class SQLStringVisitor extends LanguageVisitor {
         append(AS);
         append(SPACE);
         outputDisplayName(obj.getName());
-        addMakeDep(obj);
     }
     
     @Override
@@ -2152,6 +2238,36 @@ public class SQLStringVisitor extends LanguageVisitor {
             append(SPACE);
             append(NonReserved.EMPTY);
         }
+        append(")");//$NON-NLS-1$
+    }
+    
+    @Override
+    public void visit(XMLExists exists) {
+    	append("XMLEXISTS("); //$NON-NLS-1$
+    	XMLQuery obj = exists.getXmlQuery();
+        if (obj.getNamespaces() != null) {
+            visitNode(obj.getNamespaces());
+            append(","); //$NON-NLS-1$
+            append(SPACE);
+        }
+        visitNode(new Constant(obj.getXquery()));
+        if (!obj.getPassing().isEmpty()) {
+            append(SPACE);
+            append(NonReserved.PASSING);
+            append(SPACE);
+            registerNodes(obj.getPassing(), 0);
+        }
+        append(")");//$NON-NLS-1$
+    }
+    
+    @Override
+    public void visit(XMLCast exists) {
+    	append("XMLCAST("); //$NON-NLS-1$
+    	append(exists.getExpression());
+    	append(Tokens.SPACE);
+    	append(AS);
+    	append(Tokens.SPACE);
+    	append(DataTypeManager.getDataTypeName(exists.getType()));
         append(")");//$NON-NLS-1$
     }
 
@@ -2282,7 +2398,6 @@ public class SQLStringVisitor extends LanguageVisitor {
         append(AS);
         append(SPACE);
         outputDisplayName(obj.getName());
-        addMakeDep(obj);
     }
     
     private void addMakeDep(FromClause obj) {
@@ -2292,8 +2407,14 @@ public class SQLStringVisitor extends LanguageVisitor {
 			append(MAKEDEP);
 			appendMakeDepOptions(makeDep);
 		}
+		makeDep = obj.getMakeInd();
+		if (makeDep != null && !makeDep.isSimple()) {
+			append(SPACE);
+			append(MAKEIND);
+			appendMakeDepOptions(makeDep);
+		}
 	}
-
+    
 	@Override
     public void visit(AlterProcedure alterProcedure) {
     	append(ALTER);
@@ -2394,6 +2515,23 @@ public class SQLStringVisitor extends LanguageVisitor {
     		}
     		append(Tokens.RPAREN);
     	}
+    }
+    
+    @Override
+    public void visit(IsDistinctCriteria isDistinctCriteria) {
+    	append(isDistinctCriteria.getLeftRowValue());
+    	append(SPACE);
+    	append(IS);
+    	append(SPACE);
+    	if (isDistinctCriteria.isNegated()) {
+    		append(NOT);
+    		append(SPACE);
+    	}
+    	append(DISTINCT);
+    	append(SPACE);
+    	append(FROM);
+    	append(SPACE);
+    	append(isDistinctCriteria.getRightRowValue());
     }
 
     public static String escapeSinglePart( String part ) {

@@ -129,7 +129,7 @@ public class BasicQueryMetadata implements QueryMetadataInterface {
         return null;
     }
 
-    public Object getDefaultValue(Object elementID)
+    public String getDefaultValue(Object elementID)
         throws TeiidComponentException, QueryMetadataException {
         return null;
 	}    
@@ -579,6 +579,11 @@ public class BasicQueryMetadata implements QueryMetadataInterface {
 	
 	@Override
 	public boolean useOutputName() {
+		return true;
+	}
+	
+	@Override
+	public boolean widenComparisonToString() {
 		return true;
 	}
 	

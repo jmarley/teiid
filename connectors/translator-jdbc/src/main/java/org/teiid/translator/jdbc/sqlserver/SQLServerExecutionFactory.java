@@ -24,19 +24,37 @@
  */
 package org.teiid.translator.jdbc.sqlserver;
 
-import java.sql.*;
+import java.sql.Connection;
 import java.sql.Date;
-import java.util.*;
+import java.sql.ResultSet;
+import java.sql.SQLException;
+import java.sql.Time;
+import java.sql.Timestamp;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
 
 import org.teiid.core.util.StringUtil;
 import org.teiid.language.AggregateFunction;
 import org.teiid.language.ColumnReference;
+import org.teiid.language.Command;
 import org.teiid.language.Function;
+import org.teiid.language.Insert;
 import org.teiid.language.LanguageObject;
+import org.teiid.language.QueryExpression;
+import org.teiid.language.With;
 import org.teiid.metadata.Column;
 import org.teiid.metadata.MetadataFactory;
 import org.teiid.metadata.Table;
-import org.teiid.translator.*;
+import org.teiid.translator.ExecutionContext;
+import org.teiid.translator.MetadataProcessor;
+import org.teiid.translator.SourceSystemFunctions;
+import org.teiid.translator.Translator;
+import org.teiid.translator.TranslatorException;
+import org.teiid.translator.TypeFacility;
+import org.teiid.translator.jdbc.FunctionModifier;
 import org.teiid.translator.jdbc.JDBCExecutionFactory;
 import org.teiid.translator.jdbc.JDBCMetdataProcessor;
 import org.teiid.translator.jdbc.Version;
@@ -63,6 +81,18 @@ public class SQLServerExecutionFactory extends SybaseExecutionFactory {
 	public SQLServerExecutionFactory() {
 		setMaxInCriteriaSize(JDBCExecutionFactory.DEFAULT_MAX_IN_CRITERIA);
 		setMaxDependentInPredicates(2);
+	}
+	
+	@Override
+	public void start() throws TranslatorException {
+		super.start();
+		registerFunctionModifier(SourceSystemFunctions.WEEK, new FunctionModifier() {
+			
+			@Override
+			public List<?> translate(Function function) {
+				return Arrays.asList("DATEPART(ISO_WEEK, ", function.getParameters().get(0), ")"); //$NON-NLS-1$ //$NON-NLS-2$
+			}
+		});
 	}
 
 	@Override
@@ -277,9 +307,28 @@ public class SQLServerExecutionFactory extends SybaseExecutionFactory {
     	return getVersion().compareTo(TEN_0) >= 0;
     }
     
+    /**
+     * The SQL Server driver maps the time escape to a timestamp/datetime, so
+     * use a cast of the string literal instead.
+     */
+    @Override
+    public String translateLiteralTime(Time timeValue) {
+    	return "cast('" +  formatDateValue(timeValue) + "' as time)"; //$NON-NLS-1$ //$NON-NLS-2$
+    }
+    
     @Override
     public boolean supportsCommonTableExpressions() {
     	return true;
+    }
+    
+    @Override
+    public boolean supportsSubqueryCommonTableExpressions() {
+    	return false;
+    }
+    
+    @Override
+    public boolean supportsRecursiveCommonTableExpressions() {
+    	return getVersion().compareTo(TEN_0) >= 0;
     }
     
     @Override
@@ -379,6 +428,35 @@ public class SQLServerExecutionFactory extends SybaseExecutionFactory {
     @Override
     public boolean useWithRollup() {
     	return getVersion().compareTo(TEN_0) < 0;
+    }
+    
+    @Override
+    public boolean supportsConvert(int fromType, int toType) {
+    	if (fromType == TypeFacility.RUNTIME_CODES.OBJECT && this.convertModifier.hasTypeMapping(toType)) {
+			return true;
+    	}
+    	return super.supportsConvert(fromType, toType);
+    }
+    
+    @Override
+    public boolean supportsLiteralOnlyWithGrouping() {
+    	return true;
+    }
+    
+    @Override
+    public List<?> translateCommand(Command command, ExecutionContext context) {
+    	if (command instanceof Insert) {
+    		Insert insert = (Insert)command;
+    		if (insert.getValueSource() instanceof QueryExpression) {
+    			QueryExpression qe = (QueryExpression)insert.getValueSource();
+    			if (qe.getWith() != null) {
+    				With with = qe.getWith();
+    				qe.setWith(null);
+    				return Arrays.asList(with, insert);
+    			}
+    		}
+    	}
+    	return super.translateCommand(command, context);
     }
     
 }

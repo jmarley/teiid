@@ -22,35 +22,40 @@
 package org.teiid.jboss.rest;
 
 import static org.objectweb.asm.Opcodes.*;
+import io.swagger.annotations.ApiResponse;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.FileNotFoundException;
+import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.Reader;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Enumeration;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Properties;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipFile;
 import java.util.zip.ZipOutputStream;
 
+import org.apache.commons.io.IOUtils;
 import org.objectweb.asm.AnnotationVisitor;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.FieldVisitor;
 import org.objectweb.asm.Label;
 import org.objectweb.asm.MethodVisitor;
+import org.objectweb.asm.Opcodes;
 import org.teiid.adminapi.impl.ModelMetaData;
 import org.teiid.adminapi.impl.VDBMetaData;
 import org.teiid.core.types.DataTypeManager;
 import org.teiid.core.util.FileUtils;
 import org.teiid.core.util.ObjectConverterUtil;
 import org.teiid.core.util.StringUtil;
-import org.teiid.jboss.IntegrationPlugin;
-import org.teiid.logging.LogConstants;
-import org.teiid.logging.LogManager;
 import org.teiid.metadata.Column;
 import org.teiid.metadata.ColumnSet;
 import org.teiid.metadata.MetadataStore;
@@ -73,6 +78,7 @@ public class RestASMBasedWebArchiveBuilder {
 		props.setProperty("${context-name}", vdb.getName() + "_" + vdb.getVersion());
 		props.setProperty("${vdb-name}", vdb.getName());
 		props.setProperty("${vdb-version}", String.valueOf(vdb.getVersion()));
+		props.setProperty("${api-page-title}", vdb.getName() + "_" + vdb.getVersion() + " API");
 		
 		boolean passthroughAuth = false;
 		String securityType = vdb.getPropertyValue(ResteasyEnabler.REST_NAMESPACE+"security-type");
@@ -101,6 +107,9 @@ public class RestASMBasedWebArchiveBuilder {
 		ZipOutputStream out = new ZipOutputStream(byteStream); 
 		writeEntry("WEB-INF/web.xml", out, replaceTemplates(getFileContents("rest-war/web.xml"), props).getBytes());
 		writeEntry("WEB-INF/jboss-web.xml", out, replaceTemplates(getFileContents("rest-war/jboss-web.xml"), props).getBytes());
+		writeEntry("api.html", out, replaceTemplates(getFileContents("rest-war/api.html"), props).getBytes());
+		
+		writeDirectoryEntry(out, "swagger-ui-2.1.1.zip");
 		
 		ArrayList<String> applicationViews = new ArrayList<String>();
 		for (ModelMetaData model:vdb.getModelMetaDatas().values()) {
@@ -114,11 +123,102 @@ public class RestASMBasedWebArchiveBuilder {
 		writeEntry("WEB-INF/classes/org/teiid/jboss/rest/TeiidRestApplication.class", out, getApplicationClass(applicationViews));
 		writeEntry("META-INF/MANIFEST.MF", out, getFileContents("rest-war/MANIFEST.MF").getBytes());
 		
+		byte[] bytes = getBootstrapServletClass(vdb.getName(), vdb.getDescription() == null ? vdb.getName() : vdb.getDescription(), vdb.getVersion() + ".0", new String[]{"http"}, File.separator + props.getProperty("${context-name}"), "org.teiid.jboss.rest", true);
+		writeEntry("WEB-INF/classes/org/teiid/jboss/rest/Bootstrap.class", out, bytes);
+		
 		out.close();
 		return byteStream.toByteArray();
 	}
 
-	private void writeEntry(String name, ZipOutputStream out, byte[] contents) throws IOException {
+	protected byte[] getBootstrapServletClass(String vdbName, String desc, String version, String[] schamas, String baseUrl, String packages, Boolean scan) {
+        ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        MethodVisitor mv;
+        AnnotationVisitor av0;
+   
+        cw.visit(V1_5, ACC_PUBLIC + ACC_SUPER, "org/teiid/jboss/rest/Bootstrap", null, "org/teiid/jboss/rest/BootstrapServlet", null);
+        
+        {
+            mv = cw.visitMethod(ACC_PUBLIC, "<init>", "()V", null, null);
+            mv.visitCode();
+            mv.visitVarInsn(ALOAD, 0);
+            mv.visitMethodInsn(INVOKESPECIAL, "org/teiid/jboss/rest/BootstrapServlet", "<init>", "()V");
+            mv.visitInsn(RETURN);
+            mv.visitMaxs(1, 1);
+            mv.visitEnd();
+        }
+        
+        //init method
+        {
+            mv = cw.visitMethod(ACC_PUBLIC, "init", "(Lio/swagger/jaxrs/config/BeanConfig;)V", null, null);
+            av0 = mv.visitAnnotation("Ljava/lang/Override;", true);
+            av0.visitEnd();
+            mv.visitCode();
+            mv.visitVarInsn(ALOAD, 1);
+            mv.visitLdcInsn(vdbName);
+            mv.visitMethodInsn(INVOKEVIRTUAL, "io/swagger/jaxrs/config/BeanConfig", "setTitle", "(Ljava/lang/String;)V");
+            mv.visitVarInsn(ALOAD, 1);
+            mv.visitLdcInsn(desc);
+            mv.visitMethodInsn(INVOKEVIRTUAL, "io/swagger/jaxrs/config/BeanConfig", "setDescription", "(Ljava/lang/String;)V");
+            mv.visitVarInsn(ALOAD, 1);
+            mv.visitLdcInsn(version);
+            mv.visitMethodInsn(INVOKEVIRTUAL, "io/swagger/jaxrs/config/BeanConfig", "setVersion", "(Ljava/lang/String;)V");
+            mv.visitVarInsn(ALOAD, 1);
+            mv.visitInsn(ICONST_1);
+            mv.visitTypeInsn(ANEWARRAY, "java/lang/String");
+            Integer[] array = new Integer[]{ICONST_0, ICONST_1, ICONST_2, ICONST_3, ICONST_4, ICONST_5};
+            for(int i = 0 ; i < schamas.length ; i ++) {
+                mv.visitInsn(DUP);
+                mv.visitInsn(array[i]);
+                mv.visitLdcInsn(schamas[i]);
+                mv.visitInsn(AASTORE);
+            }
+            mv.visitMethodInsn(INVOKEVIRTUAL, "io/swagger/jaxrs/config/BeanConfig", "setSchemes", "([Ljava/lang/String;)V");
+            mv.visitVarInsn(ALOAD, 1);
+            mv.visitLdcInsn(baseUrl);
+            mv.visitMethodInsn(INVOKEVIRTUAL, "io/swagger/jaxrs/config/BeanConfig", "setBasePath", "(Ljava/lang/String;)V");
+            mv.visitVarInsn(ALOAD, 1);
+            mv.visitLdcInsn(packages);
+            mv.visitMethodInsn(INVOKEVIRTUAL, "io/swagger/jaxrs/config/BeanConfig", "setResourcePackage", "(Ljava/lang/String;)V");
+            mv.visitVarInsn(ALOAD, 1);
+            mv.visitInsn(scan?ICONST_1:ICONST_0);
+            mv.visitMethodInsn(INVOKEVIRTUAL, "io/swagger/jaxrs/config/BeanConfig", "setScan", "(Z)V");
+            mv.visitInsn(RETURN);
+            mv.visitMaxs(2, 1);
+            mv.visitEnd();
+        }
+        
+        cw.visitEnd();
+        
+        return cw.toByteArray();
+    }
+
+	private void writeDirectoryEntry(ZipOutputStream out, String name) throws IOException {
+        ZipFile zipFile = getZipFile(name);
+        Enumeration<?> en = zipFile.entries();
+        while(en.hasMoreElements()) {
+            ZipEntry entry = (ZipEntry) en.nextElement();
+            if(!entry.isDirectory()) {
+                writeEntry(entry.getName(), out, IOUtils.toByteArray(zipFile.getInputStream(entry)));
+            }
+        }
+        FileUtils.remove(new File(zipFile.getName()));
+    }
+	
+	private ZipFile getZipFile(String name) throws IOException {
+        InputStream in = this.getClass().getClassLoader().getResourceAsStream(name);
+        File file = new File(System.getProperty("java.io.tmpdir") + File.separator + System.currentTimeMillis() + ".zip");
+        FileOutputStream fos = new FileOutputStream(file);
+        byte[] buff = new byte[1024 * 4];
+        int read;
+        while((read = in.read(buff, 0, buff.length)) != -1) {
+            fos.write(buff, 0, read);
+        }
+        fos.flush();
+        fos.close();
+        return new ZipFile(file);
+    }
+
+    private void writeEntry(String name, ZipOutputStream out, byte[] contents) throws IOException {
 		ZipEntry e = new ZipEntry(name); 
 		out.putNextEntry(e);
 		FileUtils.write(new ByteArrayInputStream(contents), out, 1024);
@@ -138,14 +238,14 @@ public class RestASMBasedWebArchiveBuilder {
 		}
 		return orig;
 	}
-    
-    private static ArrayList<String> getPathParameters(String uri ) {
-        ArrayList<String> pathParams = new ArrayList<String>();
+
+    private static HashSet<String> getPathParameters(String uri ) {
+        HashSet<String> pathParams = new HashSet<String>();
         String param;
-        if (uri.contains("{")) { 
-            while (uri.indexOf("}") > -1) { 
-                int start = uri.indexOf("{"); 
-                int end = uri.indexOf("}"); 
+        if (uri.contains("{")) {
+            while (uri.indexOf("}") > -1) {
+                int start = uri.indexOf("{");
+                int end = uri.indexOf("}");
                 param = uri.substring(start + 1, end);
                 uri = uri.substring(end + 1);
                 pathParams.add(param);
@@ -188,6 +288,22 @@ public class RestASMBasedWebArchiveBuilder {
     	mv.visitFieldInsn(PUTFIELD, "org/teiid/jboss/rest/TeiidRestApplication", "empty", "Ljava/util/Set;");
     	mv.visitVarInsn(ALOAD, 0);
     	
+    	mv.visitFieldInsn(GETFIELD, "org/teiid/jboss/rest/TeiidRestApplication", "singletons", "Ljava/util/Set;");
+        mv.visitTypeInsn(NEW, "io/swagger/jaxrs/listing/ApiListingResource");
+        mv.visitInsn(DUP);
+        mv.visitMethodInsn(INVOKESPECIAL, "io/swagger/jaxrs/listing/ApiListingResource", "<init>", "()V");
+        mv.visitMethodInsn(INVOKEINTERFACE, "java/util/Set", "add", "(Ljava/lang/Object;)Z");
+        mv.visitInsn(POP);
+        mv.visitVarInsn(ALOAD, 0);
+        
+        mv.visitFieldInsn(GETFIELD, "org/teiid/jboss/rest/TeiidRestApplication", "singletons", "Ljava/util/Set;");
+        mv.visitTypeInsn(NEW, "io/swagger/jaxrs/listing/SwaggerSerializers");
+        mv.visitInsn(DUP);
+        mv.visitMethodInsn(INVOKESPECIAL, "io/swagger/jaxrs/listing/SwaggerSerializers", "<init>", "()V");
+        mv.visitMethodInsn(INVOKEINTERFACE, "java/util/Set", "add", "(Ljava/lang/Object;)Z");
+        mv.visitInsn(POP);
+        mv.visitVarInsn(ALOAD, 0);
+    	
     	for (int i = 0; i < models.size(); i++) {
 	    	mv.visitFieldInsn(GETFIELD, "org/teiid/jboss/rest/TeiidRestApplication", "singletons", "Ljava/util/Set;");
 	    	mv.visitTypeInsn(NEW, "org/teiid/jboss/rest/"+models.get(i));
@@ -228,9 +344,8 @@ public class RestASMBasedWebArchiveBuilder {
     	return cw.toByteArray();
     }
     
-    private byte[] getViewClass(String vdbName, int vdbVersion, String modelName, Schema schema, boolean passthroughAuth) {
+    protected byte[] getViewClass(String vdbName, int vdbVersion, String modelName, Schema schema, boolean passthroughAuth) {
     	ClassWriter cw = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-    	FieldVisitor fv;
     	MethodVisitor mv;
     	AnnotationVisitor av0;
     	boolean hasValidProcedures = false;
@@ -242,6 +357,13 @@ public class RestASMBasedWebArchiveBuilder {
     	av0.visit("value", "/"+modelName.toLowerCase());
     	av0.visitEnd();
     	}
+    	
+    	{
+            av0 = cw.visitAnnotation("Lio/swagger/annotations/Api;", true);
+            av0.visit("value", "/" + modelName.toLowerCase());
+            av0.visitEnd();
+        }
+    	
     	cw.visitInnerClass("javax/ws/rs/core/Response$Status", "javax/ws/rs/core/Response", "Status", ACC_PUBLIC + ACC_FINAL + ACC_STATIC + ACC_ENUM);
 
     	{
@@ -262,11 +384,6 @@ public class RestASMBasedWebArchiveBuilder {
 			String charSet = procedure.getProperty(ResteasyEnabler.REST_NAMESPACE+"CHARSET", false);
 			
 			if (uri != null && method != null) {
-				if (method.equalsIgnoreCase("GET")	&& getPathParameters(uri).size() != procedure.getParameters().size()) {
-					LogManager.logWarning(LogConstants.CTX_RUNTIME, IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50091, procedure.getFullName()));
-					continue;
-				}				
-				
 				if (contentType == null) {
 					contentType = findContentType(procedure);
 				}
@@ -332,26 +449,42 @@ public class RestASMBasedWebArchiveBuilder {
 		
 		List<ProcedureParameter> params = new ArrayList<ProcedureParameter>(procedure.getParameters().size());
 		boolean usingReturn = false;
+		boolean hasLobInput = false;
 		for (ProcedureParameter p : procedure.getParameters()) {
 			if (p.getType() == Type.In || p.getType() == Type.InOut) {
 				params.add(p);
 			} else if (p.getType() == Type.ReturnValue && procedure.getResultSet() == null) {
 				usingReturn = true;
 			}
+			if (!hasLobInput) {
+			    String runtimeType = p.getRuntimeType();
+			    hasLobInput = DataTypeManager.isLOB(runtimeType);
+			}
 		}
 		int paramsSize = params.size();
 		MethodVisitor mv;
 		
+		boolean useMultipart = false;
+        if (method.toUpperCase().equals("POST") && hasLobInput) {
+            useMultipart = true;
+        }
+		
 		AnnotationVisitor av0;
 		{
-        	StringBuilder paramSignature = new StringBuilder();
-        	paramSignature.append("(");
-        	for (int i = 0; i < paramsSize; i++) {
-        		paramSignature.append("Ljava/lang/String;");
-        	}
-        	paramSignature.append(")");
-    		
-    	mv = cw.visitMethod(ACC_PUBLIC, procedure.getName()+contentType.replace('/', '_'), paramSignature+"Ljava/io/InputStream;", null, new String[] { "javax/ws/rs/WebApplicationException" });
+    	
+		StringBuilder paramSignature = new StringBuilder();
+    	paramSignature.append("(");
+    	for (int i = 0; i < paramsSize; i++) {
+    		paramSignature.append("Ljava/lang/String;");
+    	}
+    	paramSignature.append(")");
+    	
+    	if (useMultipart) {
+    	    mv = cw.visitMethod(ACC_PUBLIC, procedure.getName()+contentType.replace('/', '_'), "(Lorg/jboss/resteasy/plugins/providers/multipart/MultipartFormDataInput;)Ljavax/ws/rs/core/StreamingOutput;", null, new String[] { "javax/ws/rs/WebApplicationException" });    	    
+    	}
+    	else {
+    	    mv = cw.visitMethod(ACC_PUBLIC, procedure.getName()+contentType.replace('/', '_'), paramSignature+"Ljavax/ws/rs/core/StreamingOutput;", null, new String[] { "javax/ws/rs/WebApplicationException" });
+    	}
     	{
     	av0 = mv.visitAnnotation("Ljavax/ws/rs/Produces;", true);
     	{
@@ -375,18 +508,56 @@ public class RestASMBasedWebArchiveBuilder {
     	av0.visitEnd();
     	}
     	
-    	// post only accepts Form inputs, not path params
-    	String paramType = "Ljavax/ws/rs/PathParam;";
-    	if (method.toUpperCase().equals("POST")) {
-    		paramType = "Ljavax/ws/rs/FormParam;";
+    	{
+    	    av0 = mv.visitAnnotation("Lio/swagger/annotations/ApiOperation;", true);
+            av0.visit("value", procedure.getName());
+            av0.visitEnd();
     	}
     	
-    	for (int i = 0; i < paramsSize; i++)
     	{
-		av0 = mv.visitParameterAnnotation(i, paramType, true);
-		av0.visit("value", params.get(i).getName());
-		av0.visitEnd();
-		}
+    	    av0 = mv.visitAnnotation("Lio/swagger/annotations/ApiResponses;", true);
+            ApiResponse[] array = new ApiResponse[]{};
+            AnnotationVisitor av1 = av0.visitArray("value");
+            for(int i = 0 ; i < array.length ; i ++) {
+                av1.visit("value", array[i]);
+            }
+            av1.visitEnd();
+            av0.visitEnd();
+    	}
+        
+    	if(useMultipart)
+    	{
+    	    av0 = mv.visitAnnotation("Ljavax/ws/rs/Consumes;", true);
+    	    {
+    	    AnnotationVisitor av1 = av0.visitArray("value");
+    	    av1.visit(null, "multipart/form-data");
+    	    av1.visitEnd();
+    	    }
+    	    av0.visitEnd();
+        }
+        
+    	if(!useMultipart) {
+        	// post only accepts Form inputs, not path params
+        	HashSet<String> pathParms = getPathParameters(uri);
+        	for (int i = 0; i < paramsSize; i++)
+        	{
+                String paramType = "Ljavax/ws/rs/FormParam;";
+                if (method.toUpperCase().equals("GET")) {
+                    paramType = "Ljavax/ws/rs/QueryParam;";
+                }
+                if (pathParms.contains(params.get(i).getName())){
+                    paramType = "Ljavax/ws/rs/PathParam;";
+                }
+        
+        		av0 = mv.visitParameterAnnotation(i, paramType, true);
+        		av0.visit("value", params.get(i).getName());
+        		av0.visitEnd();
+        		
+        		av0 = mv.visitParameterAnnotation(i, "Lio/swagger/annotations/ApiParam;", true);
+        		av0.visit("value", params.get(i).getName());
+        		av0.visitEnd();
+    		}
+    	}
     	
     	mv.visitCode();
     	Label l0 = new Label();
@@ -394,44 +565,69 @@ public class RestASMBasedWebArchiveBuilder {
     	Label l2 = new Label();
     	mv.visitTryCatchBlock(l0, l1, l2, "java/sql/SQLException");
     	mv.visitLabel(l0);
-    	mv.visitTypeInsn(NEW, "java/util/LinkedHashMap");
-    	mv.visitInsn(DUP);
-    	mv.visitMethodInsn(INVOKESPECIAL, "java/util/LinkedHashMap", "<init>", "()V");
-
-    	mv.visitVarInsn(ASTORE, paramsSize+1);
-    	for (int i = 0; i < paramsSize; i++) {
-    		mv.visitVarInsn(ALOAD, paramsSize+1);
-    		mv.visitLdcInsn(params.get(i).getName());
-    		mv.visitVarInsn(ALOAD, i+1);
-    		mv.visitMethodInsn(INVOKEINTERFACE, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
-    		mv.visitInsn(POP);
+    	
+    	if (!useMultipart) {
+        	mv.visitTypeInsn(NEW, "java/util/LinkedHashMap");
+        	mv.visitInsn(DUP);
+        	mv.visitMethodInsn(INVOKESPECIAL, "java/util/LinkedHashMap", "<init>", "()V");
+    
+        	mv.visitVarInsn(ASTORE, paramsSize+1);
+        	for (int i = 0; i < paramsSize; i++) {
+        		mv.visitVarInsn(ALOAD, paramsSize+1);
+        		mv.visitLdcInsn(params.get(i).getName());
+        		mv.visitVarInsn(ALOAD, i+1);
+        		mv.visitMethodInsn(INVOKEINTERFACE, "java/util/Map", "put", "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;");
+        		mv.visitInsn(POP);
+        	}
+        	mv.visitVarInsn(ALOAD, 0);
+        	mv.visitLdcInsn(vdbName);
+        	mv.visitIntInsn(BIPUSH, vdbVersion);
+        	
+        	mv.visitLdcInsn(procedure.getSQLString());
+        	
+        	mv.visitVarInsn(ALOAD, paramsSize+1);
+        	mv.visitLdcInsn(charSet==null?"":charSet);
+        	mv.visitInsn(passthroughAuth?ICONST_1:ICONST_0);
+        	mv.visitInsn(usingReturn?ICONST_1:ICONST_0);
+        	mv.visitMethodInsn(INVOKEVIRTUAL, "org/teiid/jboss/rest/"+modelName, "execute", "(Ljava/lang/String;ILjava/lang/String;Ljava/util/LinkedHashMap;Ljava/lang/String;ZZ)Ljavax/ws/rs/core/StreamingOutput;");
+        	mv.visitLabel(l1);
+        	mv.visitInsn(ARETURN);
+        	mv.visitLabel(l2);
+        	mv.visitFrame(F_SAME1, 0, null, 1, new Object[] {"java/sql/SQLException"});
+        	mv.visitVarInsn(ASTORE, paramsSize+1);
+        	mv.visitTypeInsn(NEW, "javax/ws/rs/WebApplicationException");
+        	mv.visitInsn(DUP);
+        	mv.visitVarInsn(ALOAD, paramsSize+1);
+        	mv.visitFieldInsn(GETSTATIC, "javax/ws/rs/core/Response$Status", "INTERNAL_SERVER_ERROR", "Ljavax/ws/rs/core/Response$Status;");
+        	mv.visitMethodInsn(INVOKESPECIAL, "javax/ws/rs/WebApplicationException", "<init>", "(Ljava/lang/Throwable;Ljavax/ws/rs/core/Response$Status;)V");
+        	mv.visitInsn(ATHROW);
+        	mv.visitMaxs(7, paramsSize+2);
+        	mv.visitEnd();
     	}
-    	
-    	mv.visitVarInsn(ALOAD, 0);
-    	
-    	mv.visitLdcInsn(vdbName);
-    	mv.visitIntInsn(BIPUSH, vdbVersion);
-    	
-    	mv.visitLdcInsn(procedure.getSQLString());
-    	
-    	mv.visitVarInsn(ALOAD, paramsSize+1);
-    	mv.visitLdcInsn(charSet==null?"":charSet);
-    	mv.visitInsn(passthroughAuth?ICONST_1:ICONST_0);
-    	mv.visitInsn(usingReturn?ICONST_1:ICONST_0);
-    	mv.visitMethodInsn(INVOKEVIRTUAL, "org/teiid/jboss/rest/"+modelName, "execute", "(Ljava/lang/String;ILjava/lang/String;Ljava/util/LinkedHashMap;Ljava/lang/String;ZZ)Ljava/io/InputStream;");
-    	mv.visitLabel(l1);
-    	mv.visitInsn(ARETURN);
-    	mv.visitLabel(l2);
-    	mv.visitFrame(F_SAME1, 0, null, 1, new Object[] {"java/sql/SQLException"});
-    	mv.visitVarInsn(ASTORE, paramsSize+1);
-    	mv.visitTypeInsn(NEW, "javax/ws/rs/WebApplicationException");
-    	mv.visitInsn(DUP);
-    	mv.visitVarInsn(ALOAD, paramsSize+1);
-    	mv.visitFieldInsn(GETSTATIC, "javax/ws/rs/core/Response$Status", "INTERNAL_SERVER_ERROR", "Ljavax/ws/rs/core/Response$Status;");
-    	mv.visitMethodInsn(INVOKESPECIAL, "javax/ws/rs/WebApplicationException", "<init>", "(Ljava/lang/Throwable;Ljavax/ws/rs/core/Response$Status;)V");
-    	mv.visitInsn(ATHROW);
-    	mv.visitMaxs(7, paramsSize+2);
-    	mv.visitEnd();
+    	else {
+    	    mv.visitVarInsn(ALOAD, 0);
+    	    mv.visitLdcInsn(vdbName);
+    	    mv.visitIntInsn(BIPUSH, vdbVersion);
+    	    mv.visitLdcInsn(procedure.getSQLString());
+    	    mv.visitVarInsn(ALOAD, 1);
+    	    mv.visitLdcInsn(charSet==null?"":charSet);
+    	    mv.visitInsn(passthroughAuth?ICONST_1:ICONST_0);
+    	    mv.visitInsn(usingReturn?ICONST_1:ICONST_0);
+    	    mv.visitMethodInsn(INVOKEVIRTUAL, "org/teiid/jboss/rest/"+modelName, "executePost", "(Ljava/lang/String;ILjava/lang/String;Lorg/jboss/resteasy/plugins/providers/multipart/MultipartFormDataInput;Ljava/lang/String;ZZ)Ljavax/ws/rs/core/StreamingOutput;");
+    	    mv.visitLabel(l1);
+    	    mv.visitInsn(ARETURN);
+    	    mv.visitLabel(l2);
+    	    mv.visitFrame(Opcodes.F_SAME1, 0, null, 1, new Object[] {"java/sql/SQLException"});
+    	    mv.visitVarInsn(ASTORE, 2);
+    	    mv.visitTypeInsn(NEW, "javax/ws/rs/WebApplicationException");
+    	    mv.visitInsn(DUP);
+    	    mv.visitVarInsn(ALOAD, 2);
+    	    mv.visitFieldInsn(GETSTATIC, "javax/ws/rs/core/Response$Status", "INTERNAL_SERVER_ERROR", "Ljavax/ws/rs/core/Response$Status;");
+    	    mv.visitMethodInsn(INVOKESPECIAL, "javax/ws/rs/WebApplicationException", "<init>", "(Ljava/lang/Throwable;Ljavax/ws/rs/core/Response$Status;)V");
+    	    mv.visitInsn(ATHROW);
+    	    mv.visitMaxs(8, 3);
+    	    mv.visitEnd();
+    	}
     	}
 	}
 	
@@ -439,7 +635,7 @@ public class RestASMBasedWebArchiveBuilder {
 		MethodVisitor mv;
 		{
 			AnnotationVisitor av0;
-			mv = cw.visitMethod(ACC_PUBLIC, "sqlQuery"+context, "(Ljava/lang/String;)Ljava/io/InputStream;", null, null);
+			mv = cw.visitMethod(ACC_PUBLIC, "sqlQuery"+context, "(Ljava/lang/String;)Ljavax/ws/rs/core/StreamingOutput;", null, null);
 			{
 			av0 = mv.visitAnnotation("Ljavax/ws/rs/Produces;", true);
 			{
@@ -458,6 +654,30 @@ public class RestASMBasedWebArchiveBuilder {
 			av0.visit("value", "/query");
 			av0.visitEnd();
 			}
+			
+			{
+			    av0 = mv.visitAnnotation("Lio/swagger/annotations/ApiOperation;", true);
+			    av0.visit("value", context);
+			    av0.visitEnd();
+			}
+			
+			{
+			    av0 = mv.visitAnnotation("Lio/swagger/annotations/ApiResponses;", true);
+			    ApiResponse[] array = new ApiResponse[]{};
+                AnnotationVisitor av1 = av0.visitArray("value");
+                for(int i = 0 ; i < array.length ; i ++) {
+                    av1.visit("value", array[i]);
+                }
+                av1.visitEnd();
+                av0.visitEnd();
+			}
+			
+			{
+			    av0 = mv.visitParameterAnnotation(0, "Lio/swagger/annotations/ApiParam;", true);
+	            av0.visit("value", context);
+	            av0.visitEnd();
+			}
+			
 			{
 			av0 = mv.visitParameterAnnotation(0, "Ljavax/ws/rs/FormParam;", true);
 			av0.visit("value", "sql");
@@ -475,7 +695,7 @@ public class RestASMBasedWebArchiveBuilder {
 			mv.visitVarInsn(ALOAD, 1);
 			mv.visitInsn(context.equals("xml")?ICONST_0:ICONST_1);
 			mv.visitInsn(passthroughAuth?ICONST_1:ICONST_0);
-			mv.visitMethodInsn(INVOKEVIRTUAL, "org/teiid/jboss/rest/"+modelName, "executeQuery", "(Ljava/lang/String;ILjava/lang/String;ZZ)Ljava/io/InputStream;");
+			mv.visitMethodInsn(INVOKEVIRTUAL, "org/teiid/jboss/rest/"+modelName, "executeQuery", "(Ljava/lang/String;ILjava/lang/String;ZZ)Ljavax/ws/rs/core/StreamingOutput;");
 			mv.visitLabel(l1);
 			mv.visitInsn(ARETURN);
 			mv.visitLabel(l2);

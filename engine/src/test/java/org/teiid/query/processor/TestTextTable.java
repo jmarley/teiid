@@ -45,11 +45,14 @@ import org.teiid.query.optimizer.capabilities.BasicSourceCapabilities;
 import org.teiid.query.optimizer.capabilities.DefaultCapabilitiesFinder;
 import org.teiid.query.optimizer.capabilities.FakeCapabilitiesFinder;
 import org.teiid.query.optimizer.capabilities.SourceCapabilities.Capability;
+import org.teiid.query.parser.QueryParser;
 import org.teiid.query.processor.relational.JoinNode;
 import org.teiid.query.processor.relational.NestedTableJoinStrategy;
 import org.teiid.query.processor.relational.RelationalPlan;
+import org.teiid.query.sql.lang.Command;
 import org.teiid.query.unittest.RealMetadataFactory;
 import org.teiid.query.util.CommandContext;
+import org.teiid.query.validator.TestValidator;
 
 @SuppressWarnings({"unchecked", "nls"})
 public class TestTextTable {
@@ -363,7 +366,11 @@ public class TestTextTable {
 	
 	@Test public void testTextTableSelector() throws Exception {
 		String sql = "select x.* from (select * from pm1.g1) y, texttable(e1 || '\n' || e2 || '\n' || e3 SELECTOR 'c' COLUMNS x string) x";
-    	
+    	Command c = QueryParser.getQueryParser().parseCommand(sql);
+		
+		assertEquals("SELECT x.* FROM (SELECT * FROM pm1.g1) AS y, TEXTTABLE(((((e1 || '\\u000A') || e2) || '\\u000A') || e3) SELECTOR c COLUMNS x string) AS x", c.toString());
+		assertEquals("SELECT x.* FROM (SELECT * FROM pm1.g1) AS y, TEXTTABLE(((((e1 || '\\u000A') || e2) || '\\u000A') || e3) SELECTOR c COLUMNS x string) AS x", c.clone().toString());
+		
         List<?>[] expected = new List<?>[] {
         		Arrays.asList("c"),
         };    
@@ -522,7 +529,7 @@ public class TestTextTable {
 	@Test public void testTextTableFixedBestEffort() throws Exception {
     	String sql = "select x.* from texttable('abc\nde\nfghi\n' COLUMNS x string width 1, y string width 1, z string width 1) x"; //$NON-NLS-1$
     	
-        List[] expected = new List[] {
+        List<?>[] expected = new List[] {
         		Arrays.asList("a", "b", "c"),
         		Arrays.asList("d", "e", null), //too short, but still parsed
         		Arrays.asList("f", "g", "h"),  //truncated
@@ -530,6 +537,55 @@ public class TestTextTable {
 
         HardcodedDataManager dataManager = new HardcodedDataManager();
         ProcessorPlan plan = helpGetPlan(helpParse(sql), RealMetadataFactory.example1Cached());
+		helpProcess(plan, dataManager, expected);
+    }
+	
+	@Test public void testNoTrimDelimited() throws Exception {
+    	String sql = "select x.* from texttable('x, y\\u000A a , \"b\"' COLUMNS x string, \" y\" string HEADER NO TRIM) x"; //$NON-NLS-1$
+    	
+        List<?>[] expected = new List[] {
+        		Arrays.asList(" a ", "b"),
+        };    
+
+        HardcodedDataManager dataManager = new HardcodedDataManager();
+        Command cmd = helpParse(sql);
+        assertEquals("SELECT x.* FROM TEXTTABLE('x, y\\u000A a , \"b\"' COLUMNS x string, \" y\" string HEADER NO TRIM) AS x", cmd.toString());
+		ProcessorPlan plan = helpGetPlan(cmd, RealMetadataFactory.example1Cached());
+		helpProcess(plan, dataManager, expected);
+    }
+	
+	@Test public void testRowDelimiter() throws Exception {
+    	String sql = "select x.* from texttable('x-1, y\n a -2, \"b\"-3' COLUMNS x string, \"1\" string ROW DELIMITER ',' DELIMITER '-' HEADER) x"; //$NON-NLS-1$
+    	
+        List<?>[] expected = new List[] {
+        		Arrays.asList("y\n a", "2"),
+        		Arrays.asList("b", "3"),
+        };    
+
+        HardcodedDataManager dataManager = new HardcodedDataManager();
+        Command cmd = helpParse(sql);
+        assertEquals("SELECT x.* FROM TEXTTABLE('x-1, y\\u000A a -2, \"b\"-3' COLUMNS x string, \"1\" string ROW DELIMITER ',' DELIMITER '-' HEADER) AS x", cmd.toString());
+		ProcessorPlan plan = helpGetPlan(cmd, RealMetadataFactory.example1Cached());
+		helpProcess(plan, dataManager, expected);
+    }
+	
+	@Test public void testRowDelimiterValidation() throws Exception {
+    	String sql = "select x.* from texttable('x' COLUMNS x string ROW DELIMITER '-' DELIMITER '-' HEADER) x"; //$NON-NLS-1$
+    	
+        TestValidator.helpValidate(sql, new String[]{"TEXTTABLE('x' COLUMNS x string ROW DELIMITER '-' DELIMITER '-' HEADER) AS x"}, RealMetadataFactory.example1Cached());
+    }
+	
+	@Test public void testDotHeader() throws Exception {
+    	String sql = "select x.x from texttable('h.1\na' COLUMNS x header 'h.1' string HEADER) x"; //$NON-NLS-1$
+    	
+        List<?>[] expected = new List[] {
+        		Arrays.asList("a"),
+        };    
+
+        HardcodedDataManager dataManager = new HardcodedDataManager();
+        Command cmd = helpParse(sql);
+        assertEquals("SELECT x.x FROM TEXTTABLE('h.1\\u000Aa' COLUMNS x 'h.1' string HEADER) AS x", cmd.toString());
+		ProcessorPlan plan = helpGetPlan(cmd, RealMetadataFactory.example1Cached());
 		helpProcess(plan, dataManager, expected);
     }
 	

@@ -24,12 +24,14 @@ package org.teiid.query.function.aggregate;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.Arrays;
 import java.util.List;
 
 import org.teiid.api.exception.query.ExpressionEvaluationException;
 import org.teiid.api.exception.query.FunctionExecutionException;
 import org.teiid.core.TeiidComponentException;
 import org.teiid.core.types.DataTypeManager;
+import org.teiid.query.function.FunctionMethods;
 import org.teiid.query.util.CommandContext;
 
 
@@ -73,6 +75,8 @@ public class Sum extends SingleArgumentAggregateFunction {
         
             this.accumulatorType = DOUBLE;
 
+        } else if(dataType.equals(DataTypeManager.DefaultDataClasses.BIG_INTEGER)) {
+        	this.accumulatorType = BIG_INTEGER;
         } else {
             this.accumulatorType = BIG_DECIMAL;
         }
@@ -95,7 +99,7 @@ public class Sum extends SingleArgumentAggregateFunction {
     	
         switch(this.accumulatorType) {        
             case LONG:
-                this.sumLong += ((Number)input).longValue();
+                this.sumLong = FunctionMethods.plus(this.sumLong, ((Number)input).longValue());
                 break;
             case DOUBLE:
                 this.sumDouble += ((Number)input).doubleValue();
@@ -137,4 +141,76 @@ public class Sum extends SingleArgumentAggregateFunction {
         }
         return this.sumBigDecimal;
     }
+    
+    @Override
+    public void getState(List<Object> state) {
+    	switch (this.accumulatorType) {
+    	case LONG:
+    		if (isNull) {
+    			state.add(null);
+    		} else {
+    			state.add(sumLong);
+    		}
+    		break;
+    	case DOUBLE:
+    		if (isNull) {
+    			state.add(null);
+    		} else {
+    			state.add(sumDouble);
+    		}
+    		break;
+    	default:
+    		state.add(sumBigDecimal);
+    		break;
+    	}
+    }
+    
+    @Override
+    public List<? extends Class<?>> getStateTypes() {
+    	switch (this.accumulatorType) {
+    	case LONG:
+    		return Arrays.asList(Long.class);
+    	case DOUBLE:
+    		return Arrays.asList(Double.class);
+    	default:
+    		return Arrays.asList(BigDecimal.class);
+    	}
+    }
+
+    public int setState(java.util.List<?> state, int index) {
+    	switch (this.accumulatorType) {
+    	case LONG:
+    	{
+    		Long val = (Long)state.get(index);
+    		if (val == null) {
+    			isNull = true;
+    			sumLong = 0;
+    		} else {
+    			isNull = false;
+    			sumLong = val;
+    		}
+    		break;
+    	}
+    	case DOUBLE:
+    	{
+    		Double val = (Double)state.get(index);
+    		if (val == null) {
+    			isNull = true;
+    			sumDouble = 0;
+    		} else {
+    			isNull = false;
+    			sumDouble = val;
+    		}
+    		break;
+    	}
+    	default:
+    		this.sumBigDecimal = (BigDecimal)state.get(index);
+    		if (this.sumBigDecimal != null) {
+    			isNull = false;
+    		}
+    		break;
+    	}
+    	return index + 1;
+    }
+
 }

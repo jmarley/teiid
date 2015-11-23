@@ -64,12 +64,21 @@ public class TeiidProducerProvider implements ContextResolver<ODataProducer>, VD
 		int version = 1;
 		String uri = uriInfo.getBaseUri().getRawPath();
 		int idx = uri.indexOf("/odata/"); //$NON-NLS-1$
-		int endIdx = uri.indexOf('/', idx+7);
-		if (endIdx == -1) {
-			vdbName = uri.substring(idx+7);
-		}
+		if (idx != -1) {
+			int endIdx = uri.indexOf('/', idx+7);
+			if (endIdx == -1) {
+				vdbName = uri.substring(idx+7);
+			}
+			else {
+				vdbName = uri.substring(idx+7, endIdx);
+			}
+		} 
 		else {
-			vdbName = uri.substring(idx+7, endIdx);
+			vdbName = getInitParameters().getProperty("allow-vdb"); //$NON-NLS-1$		
+		}
+		
+		if (vdbName == null) {
+		    throw new TeiidRuntimeException(ODataPlugin.Util.gs(ODataPlugin.Event.TEIID16008));
 		}
 		
 		int versionIdx = vdbName.indexOf('.');
@@ -131,15 +140,16 @@ public class TeiidProducerProvider implements ContextResolver<ODataProducer>, VD
 	
 	@Override
 	public void removed(String name, int version, CompositeVDB vdb) {
+		this.clientMap.remove(new VDBKey(name, version));
 	}
 	
 	@Override
 	public void finishedDeployment(String name, int version, CompositeVDB vdb,boolean reloading) {
+		this.clientMap.remove(new VDBKey(name, version));		
 	}
 	
 	@Override
 	public void beforeRemove(String name, int version, CompositeVDB vdb) {
-		this.clientMap.remove(new VDBKey(name, version));
 	}
 	
 	@Override

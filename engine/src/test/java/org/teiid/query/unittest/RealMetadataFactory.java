@@ -100,7 +100,13 @@ public class RealMetadataFactory {
         Schema vqt = createVirtualModel("VQT", metadataStore); //$NON-NLS-1$
         Schema bvqt = createVirtualModel("BQT_V", metadataStore); //$NON-NLS-1$
         Schema bvqt2 = createVirtualModel("BQT2_V", metadataStore); //$NON-NLS-1$
-        
+
+        Schema gis = createPhysicalModel("GIS", metadataStore);
+        Table colaMarkets = createPhysicalGroup("COLA_MARKETS", gis);
+        createElement("MKT_ID", colaMarkets, "integer");
+        createElement("NAME", colaMarkets, "string");
+        createElement("SHAPE", colaMarkets, "geometry");
+
         // Create physical groups
         Table bqt1SmallA = createPhysicalGroup("SmallA", bqt1); //$NON-NLS-1$
         Table bqt1SmallB = createPhysicalGroup("SmallB", bqt1); //$NON-NLS-1$
@@ -117,6 +123,8 @@ public class RealMetadataFactory {
         Table lobTable = createPhysicalGroup("LobTbl", lob); //$NON-NLS-1$
         Table library = createPhysicalGroup("LOB_TESTING_ONE", lob); //$NON-NLS-1$
         
+        Table bin = createPhysicalGroup("binary_test", lob); //$NON-NLS-1$
+        
         // add direct query procedure
         ColumnSet<Procedure> nativeProcResults = createResultSet("bqt1.nativers", new String[] {"tuple"}, new String[] { DataTypeManager.DefaultDataTypes.OBJECT}); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
         ProcedureParameter nativeparam = createParameter("param", ParameterInfo.IN, DataTypeManager.DefaultDataTypes.STRING); //$NON-NLS-1$
@@ -126,7 +134,10 @@ public class RealMetadataFactory {
         nativeProc.setResultSet(nativeProcResults);        
         
         createElements( library, new String[] { "CLOB_COLUMN", "BLOB_COLUMN", "KEY_EMULATOR" }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
-        		new String[] { DataTypeManager.DefaultDataTypes.CLOB, DataTypeManager.DefaultDataTypes.BLOB, DataTypeManager.DefaultDataTypes.INTEGER }); 
+        		new String[] { DataTypeManager.DefaultDataTypes.CLOB, DataTypeManager.DefaultDataTypes.BLOB, DataTypeManager.DefaultDataTypes.INTEGER });
+        
+        createElements( bin, new String[] { "BIN_COL" }, //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        		new String[] { DataTypeManager.DefaultDataTypes.VARBINARY }); 
 
         // Create virtual groups
         QueryNode vqtn1 = new QueryNode("SELECT * FROM BQT1.SmallA"); //$NON-NLS-1$ //$NON-NLS-2$
@@ -361,6 +372,12 @@ public class RealMetadataFactory {
 			if (!schema.getFunctions().isEmpty()) {
 				udfs.add(new FunctionTree(schema.getName(), new UDFSource(schema.getFunctions().values()), true));
 			}
+			if (!schema.getProcedures().isEmpty()) {
+				FunctionTree ft = FunctionTree.getFunctionProcedures(schema);
+				if (ft != null) {
+					udfs.add(ft);
+				}
+			}
 		}
     	TransformationMetadata metadata = new TransformationMetadata(vdbMetaData, store, null, SFM.getSystemFunctions(), udfs);
     	vdbMetaData.addAttchment(TransformationMetadata.class, metadata);
@@ -486,15 +503,19 @@ public class RealMetadataFactory {
         createKey(KeyRecord.Type.Primary, "pk", vGroup3, vElements3.subList(0, 1));
         createKey(KeyRecord.Type.Index, "idx", vGroup3, vElements3.subList(1, 2));
 
-        QueryNode vTrans4 = new QueryNode("/*+ cache(ttl:100) */ SELECT x FROM matsrc");         //$NON-NLS-1$ //$NON-NLS-2$
+        QueryNode vTrans4 = new QueryNode("/*+ cache(ttl:10000) */ SELECT x FROM matsrc");         //$NON-NLS-1$ //$NON-NLS-2$
         Table vGroup4 = createVirtualGroup("VGroup4", virtModel, vTrans4); //$NON-NLS-1$
+        vGroup4.setProperty(MaterializationMetadataRepository.MATVIEW_TTL, "100"); //$NON-NLS-1$
         vGroup4.setMaterialized(true);
         createElements(vGroup4,
                                       new String[] { "x" }, //$NON-NLS-1$
                                       new String[] { DataTypeManager.DefaultDataTypes.STRING});
         
         //non-covering index
-        QueryNode vTrans5 = new QueryNode("SELECT x, 'z' || substring(x, 2) as y, 1 as z FROM matsrc");         //$NON-NLS-1$ //$NON-NLS-2$
+        QueryNode vTrans5 = new QueryNode("SELECT x, 'z' || substring(x, 2) as y, 1 as z FROM matsrc "
+        		+ "union all SELECT ifnull(x, ' ') || 'b', 'x' || substring(x, 2) as y, 1 as z FROM matsrc "
+        		+ "union all SELECT ifnull(x, ' ') || 'c', 'y' || substring(x, 2) as y, 1 as z FROM matsrc "
+        		+ "union all SELECT ifnull(x, ' ') || 'd', 'w' || substring(x, 2) as y, 1 as z FROM matsrc");         
         Table vGroup5 = createVirtualGroup("VGroup5", virtModel, vTrans5); //$NON-NLS-1$
         vGroup5.setMaterialized(true);
         List<Column> vElements5 = createElements(vGroup5,
@@ -728,7 +749,7 @@ public class RealMetadataFactory {
         QueryNode vm1g17n1 = new QueryNode("SELECT pm3.g1.e1, pm3.g1.e2 FROM pm3.g1 UNION ALL SELECT pm3.g2.e1, pm3.g2.e2 FROM pm3.g2 ORDER BY e2");         //$NON-NLS-1$ //$NON-NLS-2$
         Table vm1g17 = createVirtualGroup("g17", vm1, vm1g17n1); //$NON-NLS-1$
 
-        QueryNode vm1g18n1 = new QueryNode("SELECT (e4 * 100.0) as x FROM pm1.g1");         //$NON-NLS-1$ //$NON-NLS-2$
+        QueryNode vm1g18n1 = new QueryNode("SELECT (e4 * cast(100.0 as double)) as x FROM pm1.g1");         //$NON-NLS-1$ //$NON-NLS-2$
         Table vm1g18 = createVirtualGroup("g18", vm1, vm1g18n1); //$NON-NLS-1$
 
         // Transformations with subqueries and correlated subqueries

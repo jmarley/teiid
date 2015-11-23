@@ -22,14 +22,7 @@
 
 package org.teiid.query.function.source;
 
-import java.io.BufferedReader;
-import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
-import java.io.PushbackInputStream;
-import java.io.Reader;
-import java.io.StringReader;
-import java.io.Writer;
+import java.io.*;
 import java.nio.CharBuffer;
 import java.nio.charset.Charset;
 import java.sql.Blob;
@@ -39,6 +32,7 @@ import java.sql.SQLException;
 import java.sql.SQLXML;
 import java.sql.Time;
 import java.sql.Timestamp;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.LinkedList;
 import java.util.List;
@@ -70,7 +64,6 @@ import net.sf.saxon.expr.JPConverter;
 import net.sf.saxon.om.Item;
 import net.sf.saxon.om.Name11Checker;
 import net.sf.saxon.om.NodeInfo;
-import net.sf.saxon.om.StandardNames;
 import net.sf.saxon.sxpath.XPathEvaluator;
 import net.sf.saxon.sxpath.XPathExpression;
 import net.sf.saxon.trans.XPathException;
@@ -80,6 +73,7 @@ import net.sf.saxon.value.DateValue;
 import net.sf.saxon.value.DayTimeDurationValue;
 import net.sf.saxon.value.TimeValue;
 
+import org.teiid.api.exception.query.FunctionExecutionException;
 import org.teiid.common.buffer.BufferManager;
 import org.teiid.common.buffer.FileStore;
 import org.teiid.common.buffer.FileStoreInputStreamFactory;
@@ -88,6 +82,7 @@ import org.teiid.core.TeiidComponentException;
 import org.teiid.core.TeiidProcessingException;
 import org.teiid.core.TeiidRuntimeException;
 import org.teiid.core.types.*;
+import org.teiid.core.types.InputStreamFactory.StorageMode;
 import org.teiid.core.types.XMLType.Type;
 import org.teiid.core.util.ObjectConverterUtil;
 import org.teiid.core.util.ReaderInputStream;
@@ -97,6 +92,8 @@ import org.teiid.json.simple.ParseException;
 import org.teiid.query.QueryPlugin;
 import org.teiid.query.eval.Evaluator;
 import org.teiid.query.function.CharsetUtils;
+import org.teiid.query.function.TeiidFunction;
+import org.teiid.query.function.metadata.FunctionCategoryConstants;
 import org.teiid.query.sql.symbol.XMLSerialize;
 import org.teiid.query.util.CommandContext;
 import org.teiid.translator.WSConnection.Util;
@@ -209,8 +206,8 @@ public class XMLSystemFunctions {
 
 		private LinkedList<String> nameStack = new LinkedList<String>();
 		private LinkedList<XMLEvent> eventStack = new LinkedList<XMLEvent>();
+		private LinkedList<Boolean> parentArray = new LinkedList<Boolean>();
 		
-		private boolean rootArray;
 		private boolean end;
 		private boolean declaredNs;
 
@@ -232,6 +229,7 @@ public class XMLSystemFunctions {
 		@Override
 		public boolean startObject() throws org.teiid.json.simple.ParseException,
 				IOException {
+			parentArray.push(false);
 			start();
 			return false;
 		}
@@ -254,10 +252,10 @@ public class XMLSystemFunctions {
 		@Override
 		public boolean startArray() throws org.teiid.json.simple.ParseException,
 				IOException {
-			if (this.nameStack.size() == 1) {
-				this.rootArray = true;
+			if ((nameStack.size() == 1 && parentArray.isEmpty()) || parentArray.peek()) {
 				start();
 			}
+			parentArray.push(true);
 			return false;
 		}
 
@@ -298,6 +296,7 @@ public class XMLSystemFunctions {
 		@Override
 		public boolean endObject() throws org.teiid.json.simple.ParseException,
 				IOException {
+			parentArray.pop();
 			end();
 			return false;
 		}
@@ -312,7 +311,8 @@ public class XMLSystemFunctions {
 		@Override
 		public boolean endArray() throws org.teiid.json.simple.ParseException,
 				IOException {
-			if (this.nameStack.size() == 1 && rootArray) {
+			parentArray.pop();
+			if ((nameStack.size() == 1 && parentArray.isEmpty()) || parentArray.peek()) {
 				end();
 			}
 			return false;
@@ -444,7 +444,7 @@ public class XMLSystemFunctions {
 	                // Feed the resultant I/O stream into the XSLT processor
 					transformer.transform(xmlParam, new StreamResult(writer));
 				}
-			});
+			}, context);
 			return new ClobType(new ClobImpl(result.getStreamFactory(), -1));
 		} finally {
 			Util.closeSource(styleSource);
@@ -484,7 +484,7 @@ public class XMLSystemFunctions {
 					throw new TransformerException(e);
 				} 
 			}
-		}));
+		}, context));
 		result.setType(Type.CONTENT);
 		return result;
 	}
@@ -516,7 +516,7 @@ public class XMLSystemFunctions {
 				} 
 			}
 
-		}));
+		}, context));
 		result.setType(Type.ELEMENT);
 		return result;
 	}
@@ -579,7 +579,7 @@ public class XMLSystemFunctions {
 		for (Object object : other) {
 			concat.addValue(object);
 		}
-		return concat.close();
+		return concat.close(context);
 	}
 	
 	public static class XmlConcat {
@@ -589,11 +589,13 @@ public class XMLSystemFunctions {
 		private FileStoreInputStreamFactory fsisf;
 		private FileStore fs;
 		private Type type;
+		private ExtendedWriter ew;
 		
 		public XmlConcat(BufferManager bm) throws TeiidProcessingException {
 			fs = bm.createFileStore("xml"); //$NON-NLS-1$
 			fsisf = new FileStoreInputStreamFactory(fs, Streamable.ENCODING);
 		    writer = fsisf.getWriter();
+		    ew = new ExtendedWriter(writer, fsisf);
 			factory = getOutputFactory();
 			try {
 				eventWriter = factory.createXMLEventWriter(writer);
@@ -612,7 +614,7 @@ public class XMLSystemFunctions {
 				type = Type.CONTENT;
 			}
 			try {
-				convertValue(writer, eventWriter, threadLocalEventtFactory.get(), object);
+				convertValue(ew, eventWriter, threadLocalEventtFactory.get(), object);
 			} catch (IOException e) {
 				fs.remove();
 				 throw new TeiidProcessingException(QueryPlugin.Event.TEIID30438, e);
@@ -629,10 +631,10 @@ public class XMLSystemFunctions {
 			return writer;
 		}
 		
-		public XMLType close() throws TeiidProcessingException {
+		public XMLType close(CommandContext context) throws TeiidProcessingException {
 			try {
 				eventWriter.flush();
-				writer.close();
+				ew.close();
 			} catch (XMLStreamException e) {
 				fs.remove();
 				 throw new TeiidProcessingException(QueryPlugin.Event.TEIID30441, e);
@@ -640,7 +642,7 @@ public class XMLSystemFunctions {
 				fs.remove();
 				 throw new TeiidProcessingException(QueryPlugin.Event.TEIID30442, e);
 			}
-	        XMLType result = new XMLType(new SQLXMLImpl(fsisf));
+	        XMLType result = new XMLType(createSQLXML(fsisf, ew, context));
 	        if (type == null) {
 	        	result.setType(Type.CONTENT);
 	        } else {
@@ -671,7 +673,7 @@ public class XMLSystemFunctions {
         	java.util.Date d = (java.util.Date)value;
         	DateTimeValue tdv = DateTimeValue.fromJavaDate(d);
         	if (value instanceof Date) {
-        		value = new DateValue(tdv.getYear(), tdv.getMonth(), tdv.getDay(), tdv.getTimezoneInMinutes());
+        		value = new DateValue(tdv.getYear(), tdv.getMonth(), tdv.getDay(), tdv.getTimezoneInMinutes(), true);
         	} else if (value instanceof Time) {
         		value = new TimeValue(tdv.getHour(), tdv.getMinute(), tdv.getSecond(), tdv.getMicrosecond(), tdv.getTimezoneInMinutes());
         	} else if (value instanceof Timestamp) {
@@ -696,8 +698,15 @@ public class XMLSystemFunctions {
 				XMLType xml = (XMLType)object;
 				Type type = xml.getType();
 				convertReader(writer, eventWriter, null, type, xml);
-			} else if (object instanceof Clob) {
-				Clob clob = (Clob)object;
+			} else if (object instanceof ClobType) {
+				ClobType clob = (ClobType)object;
+				StorageMode storageMode = InputStreamFactory.getStorageMode(clob);
+				if ((storageMode == StorageMode.PERSISTENT || storageMode == StorageMode.OTHER) && writer instanceof ExtendedWriter) {
+					ExtendedWriter ew = (ExtendedWriter)writer;
+					if (ew.include(clob)) {
+						return;
+					}
+				}
 				r = clob.getCharacterStream();
 				convertReader(writer, eventWriter, r, Type.TEXT, null);
 			} else {
@@ -723,6 +732,13 @@ public class XMLSystemFunctions {
 		case PI:
 		case COMMENT: {//write the value directly to the writer
 			eventWriter.flush();
+			StorageMode storageMode = InputStreamFactory.getStorageMode(xml);
+			if ((storageMode == StorageMode.PERSISTENT || storageMode == StorageMode.OTHER) && writer instanceof ExtendedWriter) {
+				ExtendedWriter ew = (ExtendedWriter)writer;
+				if (ew.include(xml)) {
+					break;
+				}
+			}
 			char[] buf = new char[1 << 13];
 			int read = -1;
 			if (r == null) {
@@ -766,8 +782,13 @@ public class XMLSystemFunctions {
 		}
 	}
 	
-	public static XMLType xmlComment(String comment) {
-		return new XMLType(new SQLXMLImpl("<!--" + comment + "-->")); //$NON-NLS-1$ //$NON-NLS-2$
+	public static XMLType xmlComment(String comment) throws FunctionExecutionException {
+		if (comment.contains("--") || comment.endsWith("-")) { //$NON-NLS-1$ //$NON-NLS-2$
+			throw new FunctionExecutionException(QueryPlugin.Event.TEIID31159, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID31159, comment));
+		}
+		XMLType result = new XMLType(new SQLXMLImpl("<!--" + comment + "-->")); //$NON-NLS-1$ //$NON-NLS-2$
+		result.setType(Type.COMMENT);
+		return result;
 	}
 
     public static Source convertToSource(Object value) throws TeiidProcessingException {
@@ -825,7 +846,7 @@ public class XMLSystemFunctions {
 	public static boolean isNull(Item i) {
 		if (i instanceof NodeInfo) {
 			NodeInfo ni = (NodeInfo)i;
-			return ni.getNodeKind() == net.sf.saxon.type.Type.ELEMENT && !ni.hasChildNodes() && Boolean.valueOf(ni.getAttributeValue(StandardNames.XSI_NIL));
+			return ni.getNodeKind() == net.sf.saxon.type.Type.ELEMENT && !ni.hasChildNodes() && Boolean.valueOf(ni.getAttributeValue(XMLConstants.W3C_XML_SCHEMA_INSTANCE_NS_URI, "nil")); //$NON-NLS-1$
 			/* ideally we'd be able to check for nilled, but that doesn't work without validation
 			 if (ni.isNilled()) {
 				tuple.add(null);
@@ -982,28 +1003,73 @@ public class XMLSystemFunctions {
 			    		}
 			    	}
 				}
-			});
+			}, context);
 		}
 		XMLType result = new XMLType(sqlXml);
 		result.setType(Type.DOCUMENT);
 		return result;
+	}
+	
+	private static class Include {
+		long start;
+		Streamable<?> streamable;
+		
+		public Include(long start, Streamable<?> streamable) {
+			this.start = start;
+			this.streamable = streamable;
+		}
+	}
+	
+	/**
+	 * An extension to the standard writer to allow for
+	 * direct inclusion of large values by reference rather than by copy
+	 */
+	public static class ExtendedWriter extends FilterWriter {
+
+		private static int MAX_INCLUDES = 1<<12;
+		
+		private FileStoreInputStreamFactory fsisf; 
+		private List<Include> includes = new ArrayList<Include>();
+
+		public ExtendedWriter(Writer out, FileStoreInputStreamFactory fsisf) {
+			super(out);
+			this.fsisf = fsisf;
+		}
+
+		/**
+		 * Include the streamable value, rather than inlining.
+		 * @param s
+		 * @return true if the value could be included
+		 * @throws IOException
+		 */
+		public boolean include(Streamable<?> s) throws IOException {
+			if (includes.size() == MAX_INCLUDES) {
+				return false;
+			}
+			out.flush();
+			long length = fsisf.getLength();
+			includes.add(new Include(length, s));
+			return true;
+		}
+		
 	}
 
 	/**
 	 * This method saves the given XML object to the buffer manager's disk process
 	 * Documents less than the maxMemorySize will be held directly in memory
 	 */
-	public static SQLXMLImpl saveToBufferManager(BufferManager bufferMgr, XMLTranslator translator) 
+	public static SQLXMLImpl saveToBufferManager(BufferManager bufferMgr, XMLTranslator translator, CommandContext context) 
 	    throws TeiidComponentException, TeiidProcessingException {        
 	    boolean success = false;
 	    final FileStore lobBuffer = bufferMgr.createFileStore("xml"); //$NON-NLS-1$
-	    FileStoreInputStreamFactory fsisf = new FileStoreInputStreamFactory(lobBuffer, Streamable.ENCODING);
+	    final FileStoreInputStreamFactory fsisf = new FileStoreInputStreamFactory(lobBuffer, Streamable.ENCODING);
 	    try{  
 	    	Writer writer = fsisf.getWriter();
-	        translator.translate(writer);
-	        writer.close();
+	    	final ExtendedWriter ew = new ExtendedWriter(writer, fsisf);
+	        translator.translate(ew);
+	        ew.close();
 	        success = true;
-	        return new SQLXMLImpl(fsisf);
+	        return createSQLXML(fsisf, ew, context);
 	    } catch(IOException e) {
 	         throw new TeiidComponentException(QueryPlugin.Event.TEIID30444, e);
 	    } catch(TransformerException e) {
@@ -1013,6 +1079,54 @@ public class XMLSystemFunctions {
 	    		lobBuffer.remove();
 	    	}
 	    }
+	}
+
+	private static SQLXMLImpl createSQLXML(
+			final FileStoreInputStreamFactory fsisf, final ExtendedWriter ew, CommandContext context) {
+		if (ew.includes.isEmpty()) {
+			if (fsisf.getStorageMode() == StorageMode.MEMORY) {
+		        //detach if just in memory
+		    	byte[] bytes = fsisf.getMemoryBytes();
+		    	fsisf.free();
+		    	return new SQLXMLImpl(bytes);
+			}
+			if (context != null) {
+				context.addCreatedLob(fsisf);
+			}
+		    return new SQLXMLImpl(fsisf);
+		}
+		//TODO: allow the detach to happen even if there are includes
+		InputStreamFactory isf = new InputStreamFactory() {
+
+			@Override
+			public InputStream getInputStream() throws IOException {
+				List<InputStream> streams = new ArrayList<InputStream>(ew.includes.size() * 2 + 1);
+				long last = 0;
+				for (int i = 0; i < ew.includes.size(); i++) {
+					Include include = ew.includes.get(i);
+		    		streams.add(fsisf.getInputStream(last, include.start - last));
+		    		last = include.start;
+		    		try {
+						streams.add(((BaseLob)include.streamable.getReference()).getBinaryStream());
+					} catch (SQLException e) {
+						throw new IOException(e);
+					}
+				}
+				streams.add(fsisf.getInputStream(last, -1));
+				return new SequenceInputStream(Collections.enumeration(streams));
+			}
+			
+			@Override
+			public void free() throws IOException {
+				fsisf.free();
+				ew.includes.clear();
+			}
+			
+		};
+		if (context != null) {
+			context.addCreatedLob(isf);
+		}
+		return new SQLXMLImpl(isf);
 	}
 	
 	public static Object serialize(XMLSerialize xs, XMLType value) throws TransformationException {
@@ -1073,7 +1187,7 @@ public class XMLSystemFunctions {
 				} else {
 					is = value.getBinaryStream();					
 				}
-				byte[] bytes = ObjectConverterUtil.convertToByteArray(is, DataTypeManager.MAX_LOB_MEMORY_BYTES);
+				byte[] bytes = ObjectConverterUtil.convertToByteArray(is, DataTypeManager.MAX_VARBINARY_BYTES);
 				return new BinaryType(bytes);
 			} catch (SQLException e) {
 				throw new TransformationException(CorePlugin.Event.TEIID10080, e, CorePlugin.Util.gs(CorePlugin.Event.TEIID10080, "XML", "VARBINARY")); //$NON-NLS-1$ //$NON-NLS-2$ 
@@ -1112,4 +1226,15 @@ public class XMLSystemFunctions {
 		return f;
 	}
     
+	@TeiidFunction(category=FunctionCategoryConstants.XML)
+	public static XMLType xmlText(String val) throws XMLStreamException, FactoryConfigurationError, IOException, TransformerException {
+		//TODO: see if there is a less involved way to escape
+		StringWriter writer = new StringWriter();
+		XMLEventWriter eventWriter = getOutputFactory().createXMLEventWriter(writer);
+		convertValue(writer, eventWriter, threadLocalEventtFactory.get(), val);
+		XMLType result = new XMLType(new SQLXMLImpl(writer.toString())); 
+		result.setType(Type.TEXT);
+		return result;
+	}
+	
 }

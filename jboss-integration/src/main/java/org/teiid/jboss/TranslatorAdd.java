@@ -23,19 +23,21 @@ package org.teiid.jboss;
 
 import static org.jboss.as.controller.descriptions.ModelDescriptionConstants.OP_ADDR;
 import static org.teiid.jboss.TeiidConstants.TRANSLATOR_MODULE_ATTRIBUTE;
+import static org.teiid.jboss.TeiidConstants.TRANSLATOR_SLOT_ATTRIBUTE;
 import static org.teiid.jboss.TeiidConstants.asString;
 import static org.teiid.jboss.TeiidConstants.isDefined;
 
-import java.util.List;
 import java.util.ServiceLoader;
 
-import org.jboss.as.controller.*;
+import org.jboss.as.controller.AbstractAddStepHandler;
+import org.jboss.as.controller.OperationContext;
+import org.jboss.as.controller.OperationFailedException;
+import org.jboss.as.controller.PathAddress;
 import org.jboss.dmr.ModelNode;
 import org.jboss.modules.Module;
 import org.jboss.modules.ModuleIdentifier;
 import org.jboss.modules.ModuleLoadException;
 import org.jboss.modules.ModuleLoader;
-import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceTarget;
 import org.teiid.adminapi.impl.VDBTranslatorMetaData;
 import org.teiid.deployers.TranslatorUtil;
@@ -49,11 +51,13 @@ class TranslatorAdd extends AbstractAddStepHandler {
 	@Override
 	protected void populateModel(final ModelNode operation, final ModelNode model) throws OperationFailedException{
 		TRANSLATOR_MODULE_ATTRIBUTE.validateAndSet(operation, model);
+		TRANSLATOR_SLOT_ATTRIBUTE.validateAndSet(operation, model);
 	}
 	
 	@Override
-    protected void performRuntime(final OperationContext context, final ModelNode operation, final ModelNode model,
-            final ServiceVerificationHandler verificationHandler, final List<ServiceController<?>> newControllers) throws OperationFailedException {
+    protected void performRuntime(final OperationContext context,
+            final ModelNode operation, final ModelNode model)
+            throws OperationFailedException {
 
         final ModelNode address = operation.require(OP_ADDR);
         final PathAddress pathAddress = PathAddress.pathAddress(address);
@@ -64,6 +68,11 @@ class TranslatorAdd extends AbstractAddStepHandler {
     	if (isDefined(TRANSLATOR_MODULE_ATTRIBUTE, operation, context)) {
     		moduleName = asString(TRANSLATOR_MODULE_ATTRIBUTE, operation, context);
     	}
+    	
+        String slot = null;
+        if (isDefined(TRANSLATOR_SLOT_ATTRIBUTE, operation, context)) {
+            slot = asString(TRANSLATOR_SLOT_ATTRIBUTE, operation, context);
+        }    	
 		
         final ServiceTarget target = context.getServiceTarget();
 
@@ -72,10 +81,14 @@ class TranslatorAdd extends AbstractAddStepHandler {
         ModuleLoader ml = Module.getCallerModuleLoader();
         if (moduleName != null && ml != null) {
 	        try {
-            	module = ml.loadModule(ModuleIdentifier.create(moduleName));
+	            ModuleIdentifier id = ModuleIdentifier.create(moduleName);
+	            if (slot != null) {
+	                id = ModuleIdentifier.create(moduleName, slot);
+	            }
+            	module = ml.loadModule(id);
             	translatorLoader = module.getClassLoader();
 	        } catch (ModuleLoadException e) {
-	            throw new OperationFailedException(e, new ModelNode().set(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50007, moduleName, translatorName))); 
+	            throw new OperationFailedException(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50007, moduleName, translatorName), e); 
 	        }
         }
         
@@ -85,7 +98,7 @@ class TranslatorAdd extends AbstractAddStepHandler {
         	for (ExecutionFactory ef:serviceLoader) {
         		VDBTranslatorMetaData metadata = TranslatorUtil.buildTranslatorMetadata(ef, moduleName);
         		if (metadata == null) {
-        			throw new OperationFailedException( new ModelNode().set(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50008, translatorName)));
+        			throw new OperationFailedException(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50008, translatorName));
         		}
         		
         		metadata.addAttchment(ClassLoader.class, translatorLoader);
@@ -100,7 +113,7 @@ class TranslatorAdd extends AbstractAddStepHandler {
         }
         
         if (!added) {
-        	throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50009, translatorName, moduleName)));
+        	throw new OperationFailedException(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50009, translatorName, moduleName));
         }
     }    
 }

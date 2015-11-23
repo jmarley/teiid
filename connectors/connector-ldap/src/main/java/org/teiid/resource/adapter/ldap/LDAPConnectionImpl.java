@@ -24,9 +24,23 @@ package org.teiid.resource.adapter.ldap;
 
 import java.util.Hashtable;
 
-import javax.naming.*;
-import javax.naming.directory.*;
-import javax.naming.ldap.*;
+import javax.naming.Binding;
+import javax.naming.Context;
+import javax.naming.Name;
+import javax.naming.NameClassPair;
+import javax.naming.NameParser;
+import javax.naming.NamingEnumeration;
+import javax.naming.NamingException;
+import javax.naming.directory.Attributes;
+import javax.naming.directory.DirContext;
+import javax.naming.directory.ModificationItem;
+import javax.naming.directory.SearchControls;
+import javax.naming.directory.SearchResult;
+import javax.naming.ldap.Control;
+import javax.naming.ldap.ExtendedRequest;
+import javax.naming.ldap.ExtendedResponse;
+import javax.naming.ldap.InitialLdapContext;
+import javax.naming.ldap.LdapContext;
 import javax.resource.ResourceException;
 import javax.security.auth.Subject;
 
@@ -123,7 +137,7 @@ public class LDAPConnectionImpl extends BasicConnection implements LdapContext  
 		}
 		
 		if(this.config.getLdapTxnTimeoutInMillis() != null && this.config.getLdapTxnTimeoutInMillis() != -1) { 
-			connenv.put("com.sun.jndi.ldap.connect.timeout", this.config.getLdapTxnTimeoutInMillis()); //$NON-NLS-1$
+			connenv.put("com.sun.jndi.ldap.connect.timeout", this.config.getLdapTxnTimeoutInMillis().toString()); //$NON-NLS-1$
 		}
 		
 		// Enable connection pooling for the Initial context.
@@ -134,7 +148,7 @@ public class LDAPConnectionImpl extends BasicConnection implements LdapContext  
 			initContext = new InitialLdapContext(connenv, null);
 		} catch(NamingException ne){ 
             final String msg = LDAPPlugin.Util.getString("LDAPConnection.directoryNamingError",ne.getExplanation()); //$NON-NLS-1$
-			throw new ResourceException(msg);
+			throw new ResourceException(msg, ne);
 		} 
 		LogManager.logDetail(LogConstants.CTX_CONNECTOR, "Successfully obtained initial LDAP context."); //$NON-NLS-1$
 		return initContext;

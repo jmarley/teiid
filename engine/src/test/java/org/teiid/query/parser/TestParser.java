@@ -5245,5 +5245,24 @@ public class TestParser {
     	JSONObject f = new JSONObject(Arrays.asList(new DerivedColumn("table", new ElementSymbol("a"))));
     	helpTestExpression("jsonObject(a as \"table\")", "JSONOBJECT(a AS \"table\")", f);
     }
+    
+    @Test public void testLineComment() {
+    	String sql = "select 1 -- some comment";
+    	Query query = new Query();
+    	query.setSelect(new Select(Arrays.asList(new Constant(1))));
+        helpTest(sql, "SELECT 1", query);
+    }
+    
+    @Test public void testTrimExpression() throws QueryParserException {
+    	String sql = "select trim(substring(Description, pos1+1))";
+    	Query actualCommand = (Query)QueryParser.getQueryParser().parseCommand(sql, new ParseInfo());
+		assertEquals("SELECT trim(' ' FROM substring(Description, (pos1 + 1)))", actualCommand.toString());
+    }
+    
+    @Test public void testDateTimeKeywordLiterals() throws QueryParserException {
+    	String sql = "select DATE '1970-01-02', TIME '00:01:02', TIMESTAMP '2001-01-01 02:03:04.1'";
+    	Query actualCommand = (Query)QueryParser.getQueryParser().parseCommand(sql, new ParseInfo());
+		assertEquals("SELECT {d'1970-01-02'}, {t'00:01:02'}, {ts'2001-01-01 02:03:04.1'}", actualCommand.toString()); 
+    }
 
 }

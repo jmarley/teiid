@@ -60,6 +60,9 @@ import org.teiid.core.util.UnitTestUtil;
 import org.teiid.jdbc.FakeServer;
 import org.teiid.jdbc.TestMMDatabaseMetaData;
 import org.teiid.net.socket.SocketUtil;
+import org.teiid.runtime.EmbeddedConfiguration;
+import org.teiid.runtime.TestEmbeddedServer;
+import org.teiid.runtime.TestEmbeddedServer.MockTransactionManager;
 
 @SuppressWarnings("nls")
 public class TestODBCSocketTransport {
@@ -127,25 +130,46 @@ public static class AnonSSLSocketFactory extends SSLSocketFactory {
 		}
 		
 	}
+
+	private static final MockTransactionManager TRANSACTION_MANAGER = new TestEmbeddedServer.MockTransactionManager();
+
+	enum Mode {
+		LEGACY,//how the test was originally written
+		ENABLED,
+		LOGIN,
+		DISABLED
+	}
 	
 	static class FakeOdbcServer {
 		InetSocketAddress addr;
 		ODBCSocketListener odbcTransport;
 		FakeServer server;
 		
-		public void start() throws Exception {
+		public void start(Mode mode) throws Exception {
 			SocketConfiguration config = new SocketConfiguration();
 			SSLConfiguration sslConfig = new SSLConfiguration();
-			sslConfig.setMode(SSLConfiguration.ENABLED);
-			sslConfig.setAuthenticationMode(SSLConfiguration.ANONYMOUS);
+			if (mode == Mode.LOGIN) {
+				sslConfig.setMode(SSLConfiguration.LOGIN);
+			} else if (mode == Mode.ENABLED || mode == Mode.LEGACY) {
+				sslConfig.setMode(SSLConfiguration.ENABLED);
+				sslConfig.setAuthenticationMode(SSLConfiguration.ANONYMOUS);
+			} else {
+				sslConfig.setMode(SSLConfiguration.DISABLED);
+			}
 			config.setSSLConfiguration(sslConfig);
 			addr = new InetSocketAddress(0);
 			config.setBindAddress(addr.getHostName());
 			config.setPortNumber(addr.getPort());
-			server = new FakeServer(true);
+			server = new FakeServer(false);
+			EmbeddedConfiguration ec = new EmbeddedConfiguration();
+			ec.setTransactionManager(TRANSACTION_MANAGER);
+			server.start(ec, false);
 			LogonImpl logon = Mockito.mock(LogonImpl.class);
 			odbcTransport = new ODBCSocketListener(addr, config, Mockito.mock(ClientServiceRegistryImpl.class), BufferManagerFactory.getStandaloneBufferManager(), 100000, logon, server.getDriver());
 			odbcTransport.setMaxBufferSize(1000); //set to a small size to ensure buffering over the limit works
+			if (mode == Mode.LEGACY) {
+				odbcTransport.setRequireSecure(false);
+			}
 			server.deployVDB("parts", UnitTestUtil.getTestDataPath() + "/PartsSupplier.vdb");
 		}
 		
@@ -159,7 +183,7 @@ public static class AnonSSLSocketFactory extends SSLSocketFactory {
 	private static FakeOdbcServer odbcServer = new FakeOdbcServer();
 	
 	@BeforeClass public static void oneTimeSetup() throws Exception {
-		odbcServer.start();
+		odbcServer.start(Mode.LEGACY);
 	}
 	
 	@AfterClass public static void oneTimeTearDown() throws Exception {
@@ -170,6 +194,7 @@ public static class AnonSSLSocketFactory extends SSLSocketFactory {
 	
 	@Before public void setUp() throws Exception {
 		String database = "parts";
+		TRANSACTION_MANAGER.reset();
 		connect(database);
 	}
 
@@ -224,17 +249,17 @@ public static class AnonSSLSocketFactory extends SSLSocketFactory {
 	 * tests that the portal max is handled correctly
 	 */
 	@Test public void testMultibatchSelectPrepared() throws Exception {
-		PreparedStatement s = conn.prepareStatement("select * from tables t1, tables t2 where t1.name > ?");
+		PreparedStatement s = conn.prepareStatement("select * from (select * from tables order by name desc limit 21) t1, (select * from tables order by name desc limit 21) t2 where t1.name > ?");
 		conn.setAutoCommit(false);
 		s.setFetchSize(100);
-		s.setString(1, "a");
+		s.setString(1, "0");
 		ResultSet rs = s.executeQuery();
 		int i = 0;
 		while (rs.next()) {
 			i++;
 			rs.getString(1);
 		}
-		assertEquals(462, i);
+		assertEquals(441, i);
 	}
 	
 	@Test public void testBlob() throws Exception {
@@ -356,7 +381,7 @@ public static class AnonSSLSocketFactory extends SSLSocketFactory {
 			while (rs.next()) {
 				rowCount++;
 			}
-			assertEquals(6, rowCount);
+			assertEquals(8, rowCount);
 			stmt.execute("close \"foo\"");
 		} finally {
 			ExtendedQueryExectutorImpl.simplePortal = null;
@@ -370,7 +395,7 @@ public static class AnonSSLSocketFactory extends SSLSocketFactory {
 		try {
 			assertFalse(stmt.execute("declare \"foo\" insensitive scroll cursor for select * from pg_proc;"));
 			assertFalse(stmt.execute("move 5 in \"foo\""));
-			stmt.execute("fetch 10 in \"foo\"");
+			stmt.execute("fetch 6 in \"foo\"");
 			ResultSet rs = stmt.getResultSet();
 			int rowCount = 0;
 			while (rs.next()) {
@@ -390,13 +415,13 @@ public static class AnonSSLSocketFactory extends SSLSocketFactory {
 		try {
 			assertFalse(stmt.execute("declare \"foo\" insensitive scroll cursor with hold for select * from pg_proc;"));
 			assertFalse(stmt.execute("move 5 in \"foo\""));
-			stmt.execute("fetch 10 in \"foo\"");
+			stmt.execute("fetch 7 in \"foo\"");
 			ResultSet rs = stmt.getResultSet();
 			int rowCount = 0;
 			while (rs.next()) {
 				rowCount++;
 			}
-			assertEquals(6, rowCount);
+			assertEquals(7, rowCount);
 			stmt.execute("close \"foo\"");
 		} finally {
 			ExtendedQueryExectutorImpl.simplePortal = null;
@@ -450,7 +475,7 @@ public static class AnonSSLSocketFactory extends SSLSocketFactory {
 		ResultSet rs = s.getResultSet();
 		assertTrue(rs.next());
 		String str = rs.getString(1);
-		assertTrue(str.startsWith("ProjectNode\n  + Output Columns:expr1 (integer)\n  + Statistics:\n    0: Node Output Rows: 1"));
+		assertTrue(str.startsWith("ProjectNode\n  + Relational Node ID:0\n  + Output Columns:expr1 (integer)\n  + Statistics:\n    0: Node Output Rows: 1"));
 	}
 	
 	@Test public void testSetEmptyLiteral() throws Exception {
@@ -575,6 +600,29 @@ public static class AnonSSLSocketFactory extends SSLSocketFactory {
 		assertTrue(rs.next());
 		String value = rs.getString(1);
 		assertEquals("bar", value);
+	}
+	
+	@Test public void testTransactionCycleDisabled() throws Exception {
+		Statement s = conn.createStatement();
+		s.execute("set disableLocalTxn true");
+		conn.setAutoCommit(false); 
+		assertTrue(s.execute("select * from tables order by name"));
+		conn.setAutoCommit(true);
+	}
+	
+	@Test public void testGropuByPositional() throws Exception {
+		Statement s = conn.createStatement();
+		//would normally throw an exception, but is allowable over odbc
+		s.execute("select name, count(schemaname) from tables group by 1");
+	}
+	
+	@Test public void testImplicitPortalClosing() throws Exception {
+		PreparedStatement s = conn.prepareStatement("select 1");
+		s.executeQuery();
+		
+		s.executeQuery();
+		
+		assertEquals(1, odbcServer.server.getDqp().getRequests().size());
 	}
 
 }

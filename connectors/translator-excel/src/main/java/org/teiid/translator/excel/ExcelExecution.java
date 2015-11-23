@@ -33,6 +33,7 @@ import java.sql.Clob;
 import java.sql.SQLXML;
 import java.sql.Timestamp;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Date;
 import java.util.Iterator;
 import java.util.List;
@@ -101,7 +102,7 @@ public class ExcelExecution implements ResultSetExecution {
     @Override
     public void execute() throws TranslatorException {
     	try {
-			this.xlsFiles = FileConnection.Util.getFiles(this.visitor.getXlsPath(), this.connection);
+			this.xlsFiles = FileConnection.Util.getFiles(this.visitor.getXlsPath(), this.connection, true);
 			this.rowIterator = readXLSFile(xlsFiles[fileCount.getAndIncrement()]);
 		} catch (ResourceException e) {
 			throw new TranslatorException(e);
@@ -232,7 +233,6 @@ public class ExcelExecution implements ResultSetExecution {
         		output.add(null);
         		continue;
         	}
-
         	switch (this.evaluator.evaluateInCell(cell).getCellType()) {
                 case Cell.CELL_TYPE_NUMERIC:
                     output.add(convertFromExcelType(cell.getNumericCellValue(), cell, this.expectedColumnTypes[i]));
@@ -276,7 +276,15 @@ public class ExcelExecution implements ResultSetExecution {
 		}
 		else if (expectedType.isAssignableFrom(java.sql.Time.class)) {
 			Date date = cell.getDateCellValue();
-			return new java.sql.Time(date.getTime());
+			Calendar calendar = Calendar.getInstance();
+			calendar.setTime(date);
+			StringBuilder sb = new StringBuilder();
+			sb.append(calendar.get(Calendar.HOUR_OF_DAY))
+				.append(":") //$NON-NLS-1$
+				.append(calendar.get(Calendar.MINUTE))
+				.append(":") //$NON-NLS-1$
+				.append(calendar.get(Calendar.SECOND));
+			return java.sql.Time.valueOf(sb.toString());
 		}
 		
 		if (DataTypeManager.isTransformable(double.class, expectedType)) {
@@ -335,10 +343,12 @@ public class ExcelExecution implements ResultSetExecution {
     
     @Override
     public void close() {
-    	try {
-			this.xlsFileStream.close();
-		} catch (IOException e) {
-		}
+    	if (this.xlsFileStream != null) {
+	    	try {
+				this.xlsFileStream.close();
+			} catch (IOException e) {
+			}
+    	}
     }
 
     @Override

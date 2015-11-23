@@ -22,6 +22,8 @@
 
 package org.teiid.query.processor.relational;
 
+import static org.teiid.query.analysis.AnalysisRecord.*;
+
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -31,6 +33,7 @@ import java.util.Map;
 
 import org.teiid.api.exception.query.ExpressionEvaluationException;
 import org.teiid.api.exception.query.FunctionExecutionException;
+import org.teiid.client.plan.PlanNode;
 import org.teiid.common.buffer.BlockedException;
 import org.teiid.common.buffer.BufferManager;
 import org.teiid.common.buffer.BufferManager.TupleSourceType;
@@ -44,6 +47,7 @@ import org.teiid.core.TeiidComponentException;
 import org.teiid.core.TeiidProcessingException;
 import org.teiid.core.types.DataTypeManager;
 import org.teiid.language.SortSpecification.NullOrdering;
+import org.teiid.query.analysis.AnalysisRecord;
 import org.teiid.query.eval.Evaluator;
 import org.teiid.query.function.aggregate.AggregateFunction;
 import org.teiid.query.processor.ProcessorDataManager;
@@ -434,7 +438,7 @@ public class WindowFunctionProjectNode extends SubqueryAwareRelationalNode {
 			List<Expression> collectedExpressions = new ArrayList<Expression>(expressionIndexes.keySet());
 			Evaluator eval = new Evaluator(elementMap, getDataManager(), getContext());
 			final RelationalNode sourceNode = this.getChildren()[0];
-			inputTs = new ProjectingTupleSource(sourceNode, eval, collectedExpressions) {
+			inputTs = new ProjectingTupleSource(sourceNode, eval, collectedExpressions, elementMap) {
 				int index = 0;
 				@Override
 				public List<Object> nextTuple() throws TeiidComponentException,
@@ -482,6 +486,13 @@ public class WindowFunctionProjectNode extends SubqueryAwareRelationalNode {
 	@Override
 	protected Collection<? extends LanguageObject> getObjects() {
 		return getElements();
+	}
+	
+	@Override
+	public PlanNode getDescriptionProperties() {
+    	PlanNode props = super.getDescriptionProperties();
+    	AnalysisRecord.addLanaguageObjects(props, PROP_WINDOW_FUNCTIONS, this.windows.keySet());
+        return props;
 	}
     
 }

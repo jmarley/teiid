@@ -131,6 +131,25 @@ public class RuntimePlugin {
     	TEIID40117, 
     	TEIID40118,
     	TEIID40119,
-    	TEIID40120,
+    	TEIID40120, 
+    	TEIID40121, //invalid model name
+    	TEIID40122, //error creating SSLEngine
+    	TEIID40123, 
+    	TEIID40124, 
+    	TEIID40125, 
+    	TEIID40130,
+        TEIID40131,
+        TEIID40132,
+        TEIID40133,
+        TEIID40134,
+        TEIID40135,
+        TEIID40136,
+        TEIID40137,
+        TEIID40138,
+        TEIID40139,
+        TEIID40140,
+        TEIID40141, 
+        TEIID40142, 
+        TEIID40143, //data roles required
     }
 }

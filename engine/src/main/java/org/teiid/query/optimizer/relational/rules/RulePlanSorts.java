@@ -117,6 +117,11 @@ public class RulePlanSorts implements OptimizerRule {
 					if (node.getParent() == null) {
 						root = node.getFirstChild();
 						root.removeFromParent();
+						Object cols = node.getProperty(NodeConstants.Info.OUTPUT_COLS);
+						root.setProperty(NodeConstants.Info.OUTPUT_COLS, cols);
+						if (root.getType() == NodeConstants.Types.PROJECT) {
+							root.setProperty(NodeConstants.Info.PROJECT_COLS, cols);
+						}
 						node = root;
 					} else {
 						PlanNode nextNode = node.getFirstChild();
@@ -212,13 +217,13 @@ public class RulePlanSorts implements OptimizerRule {
 		return root;
 	}
 
-	private PlanNode checkForProjectOptimization(PlanNode node, PlanNode root, 
+	static PlanNode checkForProjectOptimization(PlanNode node, PlanNode root, 
 			QueryMetadataInterface metadata, CapabilitiesFinder capFinder, AnalysisRecord record, CommandContext context) throws QueryMetadataException, TeiidComponentException, QueryPlannerException {
 		PlanNode projectNode = node.getFirstChild();
 		PlanNode parent = node.getParent();
 		boolean raiseAccess = false;
 		//special check for unrelated order by compensation
-		if (projectNode.getType() == NodeConstants.Types.ACCESS && RuleRaiseAccess.canRaiseOverSort(projectNode, metadata, capFinder, node, record, true)) {
+		if (projectNode.getType() == NodeConstants.Types.ACCESS && RuleRaiseAccess.canRaiseOverSort(projectNode, metadata, capFinder, node, record, true, context)) {
 			projectNode = NodeEditor.findNodePreOrder(projectNode, NodeConstants.Types.PROJECT, NodeConstants.Types.SOURCE | NodeConstants.Types.SET_OP);
 			if (projectNode == null) {
 				return root; //no interviening project
@@ -226,7 +231,7 @@ public class RulePlanSorts implements OptimizerRule {
 			raiseAccess = true;
 		} else if (projectNode.getType() == NodeConstants.Types.PROJECT && projectNode.getFirstChild() != null) {
 			raiseAccess = projectNode.getFirstChild().getType() == NodeConstants.Types.ACCESS 
-				&& RuleRaiseAccess.canRaiseOverSort(projectNode.getFirstChild(), metadata, capFinder, node, record, false);
+				&& RuleRaiseAccess.canRaiseOverSort(projectNode.getFirstChild(), metadata, capFinder, node, record, false, context);
 			
 			//if we can't raise the access node and this doesn't have a limit, there's no point in optimizing
 			if (!raiseAccess && (parent == null || parent.getType() != NodeConstants.Types.TUPLE_LIMIT)) {

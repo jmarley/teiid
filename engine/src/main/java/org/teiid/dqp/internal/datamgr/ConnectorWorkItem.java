@@ -36,6 +36,7 @@ import javax.xml.transform.Source;
 import javax.xml.transform.stax.StAXSource;
 import javax.xml.transform.stream.StreamSource;
 
+import org.teiid.GeometryInputSource;
 import org.teiid.adminapi.impl.VDBMetaData;
 import org.teiid.client.ResizingArrayList;
 import org.teiid.client.util.ExceptionUtil;
@@ -60,21 +61,27 @@ import org.teiid.dqp.internal.process.SaveOnReadInputStream;
 import org.teiid.dqp.message.AtomicRequestID;
 import org.teiid.dqp.message.AtomicRequestMessage;
 import org.teiid.dqp.message.AtomicResultsMessage;
+import org.teiid.language.BatchedCommand;
+import org.teiid.language.BatchedUpdates;
 import org.teiid.language.Call;
 import org.teiid.logging.CommandLogMessage.Event;
 import org.teiid.logging.LogConstants;
 import org.teiid.logging.LogManager;
 import org.teiid.logging.MessageLevel;
 import org.teiid.query.QueryPlugin;
+import org.teiid.query.function.GeometryUtils;
 import org.teiid.query.function.source.XMLSystemFunctions;
 import org.teiid.query.metadata.QueryMetadataInterface;
 import org.teiid.query.metadata.TempMetadataAdapter;
 import org.teiid.query.metadata.TempMetadataStore;
+import org.teiid.query.processor.CollectionTupleSource;
 import org.teiid.query.sql.lang.Command;
 import org.teiid.query.sql.lang.QueryCommand;
 import org.teiid.query.sql.lang.SourceHint;
+import org.teiid.query.sql.lang.SourceHint.SpecificHint;
 import org.teiid.query.sql.lang.StoredProcedure;
 import org.teiid.query.sql.symbol.Expression;
+import org.teiid.query.util.CommandContext;
 import org.teiid.resource.spi.WrappedConnection;
 import org.teiid.translator.*;
 import org.teiid.util.XMLInputStream;
@@ -99,7 +106,6 @@ public class ConnectorWorkItem implements ConnectorWork {
     /* End state information */    
     private boolean lastBatch;
     private int rowCount;
-    private boolean error;
     
     private AtomicBoolean isCancelled = new AtomicBoolean();
 	private org.teiid.language.Command translatedCommand;
@@ -118,8 +124,10 @@ public class ConnectorWorkItem implements ConnectorWork {
 	private boolean areLobsUsableAfterClose;
 	
 	private TeiidException conversionError;
-    
-    ConnectorWorkItem(AtomicRequestMessage message, ConnectorManager manager) throws TeiidComponentException {
+	
+	private ThreadCpuTimer timer = new ThreadCpuTimer();
+	
+	ConnectorWorkItem(AtomicRequestMessage message, ConnectorManager manager) throws TeiidComponentException {
         this.id = message.getAtomicRequestID();
         this.requestMsg = message;
         this.manager = manager;
@@ -132,7 +140,10 @@ public class ConnectorWorkItem implements ConnectorWork {
         SourceHint hint = message.getCommand().getSourceHint();
         if (hint != null) {
 	        this.securityContext.setGeneralHints(hint.getGeneralHints());
-	        this.securityContext.setHints(hint.getSpecificHint(message.getConnectorName()).getHints());
+	        SpecificHint specificHint = hint.getSpecificHint(message.getConnectorName());
+	        if (specificHint != null) {
+	        	this.securityContext.setHints(specificHint.getHints());
+	        }
         }
         this.securityContext.setBatchSize(this.requestMsg.getFetchSize());
         this.securityContext.setSession(requestMsg.getWorkContext().getSession());
@@ -169,15 +180,17 @@ public class ConnectorWorkItem implements ConnectorWork {
 		this.copyLobs = this.connector.isCopyLobs();
     }
     
+    @Override
     public AtomicRequestID getId() {
 		return id;
 	}
     
+    @Override
     public void cancel() {
     	try {
-            LogManager.logDetail(LogConstants.CTX_CONNECTOR, new Object[] {this.id, "Processing CANCEL request"}); //$NON-NLS-1$
+			LogManager.logDetail(LogConstants.CTX_CONNECTOR, new Object[] {this.id, "Processing CANCEL request"}); //$NON-NLS-1$
             if (this.isCancelled.compareAndSet(false, true)) {
-                this.manager.logSRCCommand(this.requestMsg, this.securityContext, Event.CANCEL, -1);
+        		this.manager.logSRCCommand(this.requestMsg, this.securityContext, Event.CANCEL, -1, null);
     	        if(execution != null) {
     	            execution.cancel();
     	        }            
@@ -189,6 +202,9 @@ public class ConnectorWorkItem implements ConnectorWork {
     }
     
     public synchronized AtomicResultsMessage more() throws TranslatorException {
+    	if (this.execution == null) {
+    		return null; //already closed
+    	}
     	if (this.dnae != null) {
     		//clear the exception if it has been set
     		DataNotAvailableException e = this.dnae;
@@ -200,29 +216,34 @@ public class ConnectorWorkItem implements ConnectorWork {
     	}
     	LogManager.logDetail(LogConstants.CTX_CONNECTOR, new Object[] {this.id, "Processing MORE request"}); //$NON-NLS-1$
     	try {
+        	timer.start();
     		return handleBatch();
     	} catch (Throwable t) {
     		throw handleError(t);
+    	} finally {
+    		timer.stop();
     	}
     }
     
     public synchronized void close() {
     	lobBuffer = null;
-    	lobStore = null; //can still be referenced by lobs and will be cleaned-up by reference
+    	if (lobStore != null) {
+    		lobStore.remove();
+    		lobStore = null;
+    	}
     	if (!manager.removeState(this.id)) {
     		return; //already closed
     	}
     	LogManager.logDetail(LogConstants.CTX_CONNECTOR, new Object[] {this.id, "Processing Close :", this.requestMsg.getCommand()}); //$NON-NLS-1$
-    	if (!error) {
-            manager.logSRCCommand(this.requestMsg, this.securityContext, Event.END, this.rowCount);
-        }
         try {
+        	timer.start();
 	        if (execution != null) {
 	            execution.close();
 	            LogManager.logDetail(LogConstants.CTX_CONNECTOR, new Object[] {this.id, "Closed execution"}); //$NON-NLS-1$
 	            if (execution instanceof ReusableExecution<?>) {
 		        	this.requestMsg.getCommandContext().putReusableExecution(this.manager.getId(), (ReusableExecution<?>) execution);
 		        }
+	            execution = null;
 	        }	        
         } catch (Throwable e) {
             LogManager.logError(LogConstants.CTX_CONNECTOR, e, e.getMessage());
@@ -235,6 +256,8 @@ public class ConnectorWorkItem implements ConnectorWork {
 	        	}
 			    LogManager.logDetail(LogConstants.CTX_CONNECTOR, new Object[] {this.id, "Closed connection"}); //$NON-NLS-1$
         	}
+        	Long time = timer.stop();
+            manager.logSRCCommand(this.requestMsg, this.securityContext, Event.END, this.rowCount, time);
         } 
     }
     
@@ -242,11 +265,10 @@ public class ConnectorWorkItem implements ConnectorWork {
     	if (t instanceof DataNotAvailableException) {
     		throw (DataNotAvailableException)t;
     	}
-    	error = true;
     	if (t instanceof RuntimeException && t.getCause() != null) {
     		t = t.getCause();
     	}
-        manager.logSRCCommand(this.requestMsg, this.securityContext, Event.ERROR, null);
+        manager.logSRCCommand(this.requestMsg, this.securityContext, Event.ERROR, null, null);
         
         String msg = QueryPlugin.Util.getString("ConnectorWorker.process_failed", this.id); //$NON-NLS-1$
         if (isCancelled.get()) {            
@@ -275,6 +297,7 @@ public class ConnectorWorkItem implements ConnectorWork {
         if(isCancelled()) {
     		 throw new TranslatorException(QueryPlugin.Event.TEIID30476, QueryPlugin.Util.gs(QueryPlugin.Event.TEIID30476));
     	}
+        timer.start();
     	try {
 	        if (this.execution == null) {
 	        	if (this.connection == null) {
@@ -320,13 +343,15 @@ public class ConnectorWorkItem implements ConnectorWork {
 				
 		        LogManager.logDetail(LogConstants.CTX_CONNECTOR, new Object[] {this.requestMsg.getAtomicRequestID(), "Obtained execution"}); //$NON-NLS-1$      
 		        //Log the Source Command (Must be after obtaining the execution context)
-		        manager.logSRCCommand(this.requestMsg, this.securityContext, Event.NEW, null); 
+		        manager.logSRCCommand(this.requestMsg, this.securityContext, Event.NEW, null, null); 
 	    	}
 	        // Execute query
 	    	this.execution.execute();
 	        LogManager.logDetail(LogConstants.CTX_CONNECTOR, new Object[] {this.id, "Executed command"}); //$NON-NLS-1$
     	} catch (Throwable t) {
     		throw handleError(t);
+    	} finally {
+    		timer.stop();
     	}
 	}
 
@@ -341,6 +366,9 @@ public class ConnectorWorkItem implements ConnectorWork {
 		} else if (command instanceof QueryCommand){
 			this.execution = Assertion.isInstanceOf(exec, ResultSetExecution.class, "QueryExpression Executions are expected to be ResultSetExecutions"); //$NON-NLS-1$
 		} else {
+			final boolean singleUpdateCount = connector.returnsSingleUpdateCount() 
+					&& (translatedCommand instanceof BatchedUpdates || (translatedCommand instanceof BatchedCommand && ((BatchedCommand)translatedCommand).getParameterValues() != null));
+			
 			Assertion.isInstanceOf(exec, UpdateExecution.class, "Update Executions are expected to be UpdateExecutions"); //$NON-NLS-1$
 			this.execution = new ResultSetExecution() {
 				private int[] results;
@@ -363,6 +391,12 @@ public class ConnectorWorkItem implements ConnectorWork {
 						DataNotAvailableException {
 					if (results == null) {
 						results = ((UpdateExecution)exec).getUpdateCounts();
+					}
+					if (singleUpdateCount) {
+						if (index++ < results[0]) {
+							return CollectionTupleSource.UPDATE_ROW;
+						}
+						return null;
 					}
 					if (index < results.length) {
 						return Arrays.asList(results[index++]);
@@ -510,7 +544,7 @@ public class ConnectorWorkItem implements ConnectorWork {
 				continue;
 			}
 			if (convertToRuntimeType[i]) {
-				Object result = convertToRuntimeType(requestMsg.getBufferManager(), value, this.schema[i]);
+				Object result = convertToRuntimeType(requestMsg.getBufferManager(), value, this.schema[i], this.requestMsg.getCommandContext());
 				if (value == result && !DataTypeManager.DefaultDataClasses.OBJECT.equals(this.schema[i])) {
 					convertToRuntimeType[i] = false;
 				} else {
@@ -530,7 +564,7 @@ public class ConnectorWorkItem implements ConnectorWork {
 							lobStore = requestMsg.getBufferManager().createFileStore("lobs"); //$NON-NLS-1$
 							lobBuffer = new byte[1 << 14];
 						}
-						result = requestMsg.getBufferManager().persistLob((Streamable<?>) result, lobStore, lobBuffer);
+						requestMsg.getBufferManager().persistLob((Streamable<?>) result, lobStore, lobBuffer);
 					} else if (value == result) {
 						convertToDesiredRuntimeType[i] = false;
 						continue;
@@ -544,7 +578,7 @@ public class ConnectorWorkItem implements ConnectorWork {
 		return row;
 	}
 	
-	static Object convertToRuntimeType(BufferManager bm, Object value, Class<?> desiredType) throws TransformationException {
+	static Object convertToRuntimeType(BufferManager bm, Object value, Class<?> desiredType, CommandContext context) throws TransformationException {
 		if (desiredType != DataTypeManager.DefaultDataClasses.XML || !(value instanceof Source)) {
 			if (value instanceof InputStreamFactory) {
 				return new BlobType(new BlobImpl((InputStreamFactory)value));
@@ -556,9 +590,31 @@ public class ConnectorWorkItem implements ConnectorWork {
 	
 				try {
 					SaveOnReadInputStream is = new SaveOnReadInputStream(((DataSource)value).getInputStream(), fsisf);
+					if (context != null) {
+						context.addCreatedLob(fsisf);
+					}
 					return new BlobType(new BlobImpl(is.getInputStreamFactory()));
 				} catch (IOException e) {
 					throw new TransformationException(QueryPlugin.Event.TEIID30500, e, e.getMessage());
+				}
+			}
+			if (value instanceof GeometryInputSource) {
+				GeometryInputSource gis = (GeometryInputSource)value;
+				try {
+					InputStream is = gis.getEwkb();
+					if (is != null) {
+						return GeometryUtils.geometryFromEwkb(is, gis.getSrid());
+					}
+				} catch (Exception e) {
+					throw new TransformationException(e);
+				}
+				try {
+					Reader r = gis.getGml();
+					if (r != null) {
+						return GeometryUtils.geometryFromGml(r, gis.getSrid());
+					}
+				} catch (Exception e) {
+					throw new TransformationException(e);
 				}
 			}
 		}
@@ -575,6 +631,9 @@ public class ConnectorWorkItem implements ConnectorWork {
 					final FileStoreInputStreamFactory fsisf = new FileStoreInputStreamFactory(fs, Streamable.ENCODING);
 
 					value = new SaveOnReadInputStream(is, fsisf).getInputStreamFactory();
+					if (context != null) {
+						context.addCreatedLob(fsisf);
+					}
 				} else if (value instanceof StAXSource) {
 					//TODO: do this lazily.  if the first access to get the STaXSource, then 
 					//it's more efficient to let the processing happen against STaX
@@ -583,6 +642,9 @@ public class ConnectorWorkItem implements ConnectorWork {
 						final FileStore fs = bm.createFileStore("xml"); //$NON-NLS-1$
 						final FileStoreInputStreamFactory fsisf = new FileStoreInputStreamFactory(fs, Streamable.ENCODING);
 						value = new SaveOnReadInputStream(new XMLInputStream(ss, XMLSystemFunctions.getOutputFactory(true)), fsisf).getInputStreamFactory();
+						if (context != null) {
+							context.addCreatedLob(fsisf);
+						}
 					} catch (XMLStreamException e) {
 						throw new TransformationException(e);
 					}
@@ -591,7 +653,7 @@ public class ConnectorWorkItem implements ConnectorWork {
 					StandardXMLTranslator sxt = new StandardXMLTranslator((Source)value);
 					SQLXMLImpl sqlxml;
 					try {
-						sqlxml = XMLSystemFunctions.saveToBufferManager(bm, sxt);
+						sqlxml = XMLSystemFunctions.saveToBufferManager(bm, sxt, context);
 					} catch (TeiidComponentException e) {
 						 throw new TransformationException(e);
 					} catch (TeiidProcessingException e) {
@@ -604,5 +666,30 @@ public class ConnectorWorkItem implements ConnectorWork {
 		}
 		return DataTypeManager.convertToRuntimeType(value, desiredType != DataTypeManager.DefaultDataClasses.OBJECT);
 	}
+
+    @Override
+    public int hashCode() {
+        final int prime = 31;
+        int result = 1;
+        result = prime * result + ((id == null) ? 0 : id.hashCode());
+        return result;
+    }
+
+    @Override
+    public boolean equals(Object obj) {
+        if (this == obj)
+            return true;
+        if (obj == null)
+            return false;
+        if (!(obj instanceof ConnectorWork))
+            return false;
+        ConnectorWork other = (ConnectorWork) obj;
+        if (id == null) {
+            if (other.getId() != null)
+                return false;
+        } else if (!id.equals(other.getId()))
+            return false;
+        return true;
+    }
 
 }

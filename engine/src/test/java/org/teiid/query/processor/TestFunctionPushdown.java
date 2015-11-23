@@ -405,8 +405,127 @@ public class TestFunctionPushdown {
                 new String[] {"SELECT concat2(g_0.e1, g_0.e1) FROM pm1.g1 AS g_0"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
 	}
 	
+	@Test public void testPartialProjectPushdown() throws Exception {
+		QueryMetadataInterface metadata = RealMetadataFactory.example1Cached();
+		
+        BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+        caps.setCapabilitySupport(Capability.QUERY_SEARCHED_CASE, true);
+        
+        ProcessorPlan plan = helpPlan("select case when e1 = 1 then 1 else 0 end, e2 + e4 from pm1.g1", metadata, null, new DefaultCapabilitiesFinder(caps), 
+                new String[] {"SELECT CASE WHEN g_0.e1 = '1' THEN 1 ELSE 0 END, g_0.e2, g_0.e4 FROM pm1.g1 AS g_0"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
+        HardcodedDataManager dm = new HardcodedDataManager(metadata);
+        dm.addData("SELECT CASE WHEN g_0.e1 = '1' THEN 1 ELSE 0 END, g_0.e2, g_0.e4 FROM g1 AS g_0", new List[] {Arrays.asList(1, 2, 3.1)});
+        TestProcessor.helpProcess(plan, dm, new List[] {Arrays.asList(1, 5.1)});
+	}
+	
+	@Test public void testMustPushdownOverGrouping() throws Exception {
+		TransformationMetadata tm = RealMetadataFactory.fromDDL("create foreign function func (param integer) returns integer; create foreign table g1 (e1 integer)", "x", "y");
+		BasicSourceCapabilities bsc = new BasicSourceCapabilities();
+		bsc.setCapabilitySupport(Capability.SELECT_WITHOUT_FROM, true);
+		bsc.setCapabilitySupport(Capability.QUERY_SELECT_EXPRESSION, true);
+		final DefaultCapabilitiesFinder capFinder = new DefaultCapabilitiesFinder(bsc);
+        
+		CommandContext cc = TestProcessor.createCommandContext();
+        cc.setQueryProcessorFactory(new QueryProcessor.ProcessorFactory() {
+			
+			@Override
+			public PreparedPlan getPreparedPlan(String query, String recursionGroup,
+					CommandContext commandContext, QueryMetadataInterface metadata)
+					throws TeiidProcessingException, TeiidComponentException {
+				return null;
+			}
+			
+			@Override
+			public CapabilitiesFinder getCapabiltiesFinder() {
+				return capFinder;
+			}
+			
+			@Override
+			public QueryProcessor createQueryProcessor(String query,
+					String recursionGroup, CommandContext commandContext,
+					Object... params) throws TeiidProcessingException,
+					TeiidComponentException {
+				// TODO Auto-generated method stub
+				return null;
+			}
+		});
+        cc.setMetadata(tm);
+		
+        String sql = "select func(e1) from g1 group by e1"; //$NON-NLS-1$
+        
+        ProcessorPlan plan = helpPlan(sql, tm, null, capFinder, 
+                                      new String[] {"SELECT y.g1.e1 FROM y.g1"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ 
+        
+        HardcodedDataManager dataManager = new HardcodedDataManager();
+        dataManager.addData("SELECT y.g1.e1 FROM y.g1", new List[] {Arrays.asList(1), Arrays.asList(2)});
+        dataManager.addData("SELECT func(1)", new List[] {Arrays.asList(2)});
+        dataManager.addData("SELECT func(2)", new List[] {Arrays.asList(3)});
+        
+        TestProcessor.helpProcess(plan, cc, dataManager, new List[] {Arrays.asList(2), Arrays.asList(3)});
+	}
+	
+	@Test public void testMustPushdownSubexpressionOverGrouping() throws Exception {
+		TransformationMetadata tm = RealMetadataFactory.fromDDL("create foreign function func (param integer) returns integer; create foreign table g1 (e1 integer, e2 integer)", "x", "y");
+		BasicSourceCapabilities bsc = new BasicSourceCapabilities();
+		bsc.setCapabilitySupport(Capability.SELECT_WITHOUT_FROM, true);
+		bsc.setCapabilitySupport(Capability.QUERY_SELECT_EXPRESSION, true);
+		final DefaultCapabilitiesFinder capFinder = new DefaultCapabilitiesFinder(bsc);
+        
+		CommandContext cc = TestProcessor.createCommandContext();
+        cc.setQueryProcessorFactory(new QueryProcessor.ProcessorFactory() {
+			
+			@Override
+			public PreparedPlan getPreparedPlan(String query, String recursionGroup,
+					CommandContext commandContext, QueryMetadataInterface metadata)
+					throws TeiidProcessingException, TeiidComponentException {
+				return null;
+			}
+			
+			@Override
+			public CapabilitiesFinder getCapabiltiesFinder() {
+				return capFinder;
+			}
+			
+			@Override
+			public QueryProcessor createQueryProcessor(String query,
+					String recursionGroup, CommandContext commandContext,
+					Object... params) throws TeiidProcessingException,
+					TeiidComponentException {
+				// TODO Auto-generated method stub
+				return null;
+			}
+		});
+        cc.setMetadata(tm);
+		
+        String sql = "select max(func(e2)) from g1 group by e1"; //$NON-NLS-1$
+        
+        ProcessorPlan plan = helpPlan(sql, tm, null, capFinder, 
+                                      new String[] {"SELECT y.g1.e1, func(y.g1.e2) FROM y.g1"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ 
+        
+        HardcodedDataManager dataManager = new HardcodedDataManager();
+        dataManager.addData("SELECT y.g1.e1, func(y.g1.e2) FROM y.g1", new List[] {Arrays.asList(1, 2), Arrays.asList(2, 3)});
+        
+        TestProcessor.helpProcess(plan, cc, dataManager, new List[] {Arrays.asList(2), Arrays.asList(3)});
+	}
+	
 	public static String sourceFunc(String msg) {
 		return msg;
+	}
+	
+	@Test public void testPartialProjectPushdownCorrelatedSubquery() throws Exception {
+		QueryMetadataInterface metadata = RealMetadataFactory.example1Cached();
+		
+        BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+        caps.setCapabilitySupport(Capability.QUERY_SUBQUERIES_CORRELATED, true);
+        caps.setCapabilitySupport(Capability.QUERY_SUBQUERIES_SCALAR, true);
+        caps.setCapabilitySupport(Capability.QUERY_AGGREGATES_MAX, true);
+        caps.setCapabilitySupport(Capability.QUERY_FROM_INLINE_VIEWS, true);
+        
+        ProcessorPlan plan = helpPlan("select x.c, case when e1 = 1 then 1 else 0 end, (select e1 from pm1.g1 where pm1.g1.e1 = pm1.g2.e1) from pm1.g2, (select max(e1) as c from pm1.g2) x where x.c = pm1.g2.e1", metadata, null, new DefaultCapabilitiesFinder(caps), 
+                new String[] {"SELECT v_0.c_0, g_0.e1, (SELECT g_2.e1 FROM pm1.g1 AS g_2 WHERE g_2.e1 = g_0.e1) FROM pm1.g2 AS g_0, (SELECT MAX(g_1.e1) AS c_0 FROM pm1.g2 AS g_1) AS v_0 WHERE v_0.c_0 = g_0.e1"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
+        HardcodedDataManager dm = new HardcodedDataManager(metadata);
+        dm.addData("SELECT v_0.c_0, g_0.e1, (SELECT g_2.e1 FROM g1 AS g_2 WHERE g_2.e1 = g_0.e1) FROM g2 AS g_0, (SELECT MAX(g_1.e1) AS c_0 FROM g2 AS g_1) AS v_0 WHERE v_0.c_0 = g_0.e1", new List[] {Arrays.asList("a", "a", "a")});
+        TestProcessor.helpProcess(plan, dm, new List[] {Arrays.asList("a", 0, "a")});
 	}
 	
 }

@@ -50,16 +50,18 @@ import org.teiid.core.util.ArgCheck;
 import org.teiid.core.util.PropertiesUtils;
 import org.teiid.deployers.VDBRepository;
 import org.teiid.dqp.internal.process.DQPCore;
-import org.teiid.dqp.service.GSSResult;
 import org.teiid.dqp.service.SessionService;
 import org.teiid.dqp.service.SessionServiceException;
+import org.teiid.logging.AuditMessage;
 import org.teiid.logging.LogConstants;
 import org.teiid.logging.LogManager;
+import org.teiid.logging.MessageLevel;
 import org.teiid.net.ServerConnection;
 import org.teiid.net.TeiidURL;
 import org.teiid.net.socket.AuthenticationType;
 import org.teiid.runtime.RuntimePlugin;
 import org.teiid.security.Credentials;
+import org.teiid.security.GSSResult;
 import org.teiid.security.SecurityHelper;
 
 
@@ -79,7 +81,7 @@ public class SessionServiceImpl implements SessionService {
 	private long sessionExpirationTimeLimit = DEFAULT_SESSION_EXPIRATION;
 	private AuthenticationType defaultAuthenticationType = AuthenticationType.USERPASSWORD;
 	
-	private static boolean CHECK_PING = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.checkPing", true);
+	private static boolean CHECK_PING = PropertiesUtils.getBooleanProperty(System.getProperties(), "org.teiid.checkPing", true); //$NON-NLS-1$
 	/*
 	 * Injected state
 	 */
@@ -89,7 +91,7 @@ public class SessionServiceImpl implements SessionService {
     private DQPCore dqp;
 
     private Map<String, SessionMetadata> sessionCache = new ConcurrentHashMap<String, SessionMetadata>();
-    private Timer sessionMonitor = new Timer("SessionMonitor", true); //$NON-NLS-1$    
+    private Timer sessionMonitor = null;    
     private List<String> securityDomainNames;
     
     public void setSecurityDomain(String domainName) {
@@ -124,8 +126,13 @@ public class SessionServiceImpl implements SessionService {
 
 	@Override
 	public void closeSession(String sessionID) throws InvalidSessionException {
-		LogManager.logDetail(LogConstants.CTX_SECURITY, new Object[] {"closeSession", sessionID}); //$NON-NLS-1$
+		if (LogManager.isMessageToBeRecorded(LogConstants.CTX_SECURITY, MessageLevel.DETAIL)) {
+			LogManager.logDetail(LogConstants.CTX_SECURITY, new Object[] {"closeSession", sessionID}); //$NON-NLS-1$
+		}
 		SessionMetadata info = getSessionInfo(sessionID, true);
+		if (LogManager.isMessageToBeRecorded(LogConstants.CTX_AUDITLOGGING, MessageLevel.DETAIL)) {
+			LogManager.logDetail(LogConstants.CTX_AUDITLOGGING, new AuditMessage("session", "logoff", info)); //$NON-NLS-1$ //$NON-NLS-2$
+		}
 		if (info.getVDBName() != null) {
             try {
     			dqp.terminateSession(info.getSessionId());
@@ -133,6 +140,9 @@ public class SessionServiceImpl implements SessionService {
                 LogManager.logWarning(LogConstants.CTX_SECURITY,e, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40018));
             }
 		}
+		info.setSecurityContext(null);
+		info.setClosed();
+		info.getSessionVariables().clear();
 	}
 	
 	@Override
@@ -146,99 +156,93 @@ public class SessionServiceImpl implements SessionService {
         Object securityContext = null;
         Subject subject = null;
         
-        // Validate VDB and version if logging on to server product...
-        VDBMetaData vdb = null;
-        if (vdbName != null) {
-        	vdb = getActiveVDB(vdbName, vdbVersion);
+        AuditMessage.LogonInfo info = new AuditMessage.LogonInfo(vdbName, vdbVersion, authType.toString(), userName, applicationName);
+        
+        if (LogManager.isMessageToBeRecorded(LogConstants.CTX_AUDITLOGGING, MessageLevel.DETAIL)) {
+        	LogManager.logDetail(LogConstants.CTX_AUDITLOGGING, new AuditMessage("session", "logon-request", info, null)); //$NON-NLS-1$ //$NON-NLS-2$
         }
-
-        if (sessionMaxLimit > 0 && getActiveSessionsCount() >= sessionMaxLimit) {
-             throw new SessionServiceException(RuntimePlugin.Event.TEIID40043, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40043, new Long(sessionMaxLimit)));
-        }
+        try {
         
-        String securityDomain = getSecurityDomain(userName, vdbName, vdbVersion, vdb);
-        
-		if (securityDomain != null) {
-	        // Authenticate user...
-	        // if not authenticated, this method throws exception
-            LogManager.logDetail(LogConstants.CTX_SECURITY, new Object[] {"authenticateUser", userName, applicationName}); //$NON-NLS-1$
-
-        	boolean onlyAllowPassthrough = Boolean.valueOf(properties.getProperty(TeiidURL.CONNECTION.PASSTHROUGH_AUTHENTICATION, "false")); //$NON-NLS-1$
-        	TeiidLoginContext membership = null;
-        	if (onlyAllowPassthrough || authType.equals(AuthenticationType.GSS)) {
-                membership = passThroughLogin(userName, securityDomain);
-        	} else {
-	        	membership = authenticate(userName, credentials, applicationName, securityDomain);
-        	}
-	        userName = membership.getUserName();
-	        securityDomain = membership.getSecurityDomain();
-	        securityContext = membership.getSecurityContext();
-	        subject = membership.getSubject();
-		}
-		else {
-        	LogManager.logDetail(LogConstants.CTX_SECURITY, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40117)); 
-		}
-        
-        long creationTime = System.currentTimeMillis();
-
-        // Return a new session info object
-        SessionMetadata newSession = new SessionMetadata();
-        newSession.setSessionToken(new SessionToken(userName));
-        newSession.setSessionId(newSession.getSessionToken().getSessionID());
-        newSession.setUserName(userName);
-        newSession.setCreatedTime(creationTime);
-        newSession.setApplicationName(applicationName);
-        newSession.setClientHostName(properties.getProperty(TeiidURL.CONNECTION.CLIENT_HOSTNAME));
-        newSession.setIPAddress(properties.getProperty(TeiidURL.CONNECTION.CLIENT_IP_ADDRESS));
-        newSession.setClientHardwareAddress(properties.getProperty(TeiidURL.CONNECTION.CLIENT_MAC));
-        newSession.setSecurityDomain(securityDomain);
-        if (vdb != null) {
-	        newSession.setVDBName(vdb.getName());
-	        newSession.setVDBVersion(vdb.getVersion());
-        }
-        
-        // these are local no need for monitoring.
-        newSession.setSubject(subject);
-        newSession.setSecurityContext(securityContext);
-        newSession.setVdb(vdb);
-        LogManager.logDetail(LogConstants.CTX_SECURITY, new Object[] {"Logon successful, created", newSession }); //$NON-NLS-1$ 
-        this.sessionCache.put(newSession.getSessionId(), newSession);
-        return newSession;
-	}
-
-	public TeiidLoginContext passThroughLogin(String userName, String securityDomain) throws LoginException {
-		Subject existing = this.securityHelper.getSubjectInContext(securityDomain);
-		if (existing != null) {
-			return new TeiidLoginContext(getUserName(existing, userName)+AT+securityDomain, existing, securityDomain, this.securityHelper.getSecurityContext());
-		}
-		throw new LoginException(RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40087));
-	}
+	        // Validate VDB and version if logging on to server product...
+	        VDBMetaData vdb = null;
+	        if (vdbName != null) {
+	        	vdb = getActiveVDB(vdbName, vdbVersion);
+	        }
 	
-	private String getUserName(Subject subject, String userName) {
-		Set<Principal> principals = subject.getPrincipals();
-		for (Principal p:principals) {
-			if (p instanceof Group) {
-				continue;
+	        if (sessionMaxLimit > 0 && getActiveSessionsCount() >= sessionMaxLimit) {
+	             throw new SessionServiceException(RuntimePlugin.Event.TEIID40043, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40043, new Long(sessionMaxLimit)));
+	        }
+	        
+	        String securityDomain = getSecurityDomain(userName, vdbName, vdbVersion, vdb);
+	        
+			if (securityDomain != null) {
+		        // Authenticate user...
+		        // if not authenticated, this method throws exception
+	            LogManager.logDetail(LogConstants.CTX_SECURITY, new Object[] {"authenticateUser", userName, applicationName}); //$NON-NLS-1$
+	
+	            boolean onlyAllowPassthrough = Boolean.valueOf(properties.getProperty(TeiidURL.CONNECTION.PASSTHROUGH_AUTHENTICATION,
+	                    "false")); //$NON-NLS-1$
+	        	String baseUserName = getBaseUsername(userName);
+	    		if (onlyAllowPassthrough || authType.equals(AuthenticationType.GSS)) {
+	        		subject = this.securityHelper.getSubjectInContext(securityDomain);
+	    	        if (subject == null) {
+	    	        	throw new LoginException(RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40087));
+	    	        }
+	    	        userName = escapeName(getUserName(subject, baseUserName)) + AT + securityDomain;
+	    	        securityContext = this.securityHelper.getSecurityContext();
+	        	} else {
+	        		userName = escapeName(baseUserName) + AT + securityDomain;
+	        		securityContext = this.securityHelper.authenticate(securityDomain, baseUserName, credentials, applicationName);
+	        		subject = this.securityHelper.getSubjectInContext(securityContext);
+	        	}
 			}
-			return p.getName();
-		}
-		return getBaseUsername(userName);
+			else {
+	        	LogManager.logDetail(LogConstants.CTX_SECURITY, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40117)); 
+			}
+	        
+	        long creationTime = System.currentTimeMillis();
+	
+	        // Return a new session info object
+	        SessionMetadata newSession = new SessionMetadata();
+	        newSession.setSessionToken(new SessionToken(userName));
+	        newSession.setSessionId(newSession.getSessionToken().getSessionID());
+	        newSession.setUserName(userName);
+	        newSession.setCreatedTime(creationTime);
+	        newSession.setApplicationName(applicationName);
+	        newSession.setClientHostName(properties.getProperty(TeiidURL.CONNECTION.CLIENT_HOSTNAME));
+	        newSession.setIPAddress(properties.getProperty(TeiidURL.CONNECTION.CLIENT_IP_ADDRESS));
+	        newSession.setClientHardwareAddress(properties.getProperty(TeiidURL.CONNECTION.CLIENT_MAC));
+	        newSession.setSecurityDomain(securityDomain);
+	        if (vdb != null) {
+		        newSession.setVDBName(vdb.getName());
+		        newSession.setVDBVersion(vdb.getVersion());
+	        }
+	        
+	        // these are local no need for monitoring.
+	        newSession.setSubject(subject);
+	        newSession.setSecurityContext(securityContext);
+	        newSession.setVdb(vdb);
+	        if (LogManager.isMessageToBeRecorded(LogConstants.CTX_SECURITY, MessageLevel.DETAIL)) {
+	        	LogManager.logDetail(LogConstants.CTX_SECURITY, new Object[] {"Logon successful, created", newSession }); //$NON-NLS-1$
+	        }
+	        this.sessionCache.put(newSession.getSessionId(), newSession);
+	        if (LogManager.isMessageToBeRecorded(LogConstants.CTX_AUDITLOGGING, MessageLevel.DETAIL)) {
+	        	LogManager.logDetail(LogConstants.CTX_AUDITLOGGING, new AuditMessage("session", "logon-success", newSession)); //$NON-NLS-1$ //$NON-NLS-2$
+	        }
+	        return newSession;
+        } catch (LoginException e) {
+	        if (LogManager.isMessageToBeRecorded(LogConstants.CTX_AUDITLOGGING, MessageLevel.DETAIL)) {
+	        	LogManager.logDetail(LogConstants.CTX_AUDITLOGGING, new AuditMessage("session", "logon-fail", info, e)); //$NON-NLS-1$ //$NON-NLS-2$
+	        }
+        	throw e;
+        } catch (SessionServiceException e) {
+	        if (LogManager.isMessageToBeRecorded(LogConstants.CTX_AUDITLOGGING, MessageLevel.DETAIL)) {
+	        	LogManager.logDetail(LogConstants.CTX_AUDITLOGGING, new AuditMessage("session", "logon-fail", info, e)); //$NON-NLS-1$ //$NON-NLS-2$
+	        }
+        	throw e;
+        }
 	}
 	
-	/**
-	 * 
-	 * @param userName
-	 * @param credentials
-	 * @param applicationName
-	 * @param domains
-	 * @return
-	 * @throws LoginException
-	 */
-	protected TeiidLoginContext authenticate(String userName, Credentials credentials, String applicationName, String securityDomain)
-			throws LoginException {
-		return passThroughLogin(userName, securityDomain);
-	}
-
 	protected VDBMetaData getActiveVDB(String vdbName, String vdbVersion) throws SessionServiceException {
 		VDBMetaData vdb = null;
 		
@@ -389,6 +393,7 @@ public class SessionServiceImpl implements SessionService {
 	
 	public void start() {
 		LogManager.logDetail(LogConstants.CTX_SECURITY, new Object[] {"Default security domain configured=", this.securityDomainNames}); //$NON-NLS-1$
+		this.sessionMonitor = new Timer("SessionMonitor", true); //$NON-NLS-1$
         this.sessionMonitor.schedule(new TimerTask() {
         	@Override
         	public void run() {
@@ -398,7 +403,9 @@ public class SessionServiceImpl implements SessionService {
 	}
 
 	public void stop(){
-		this.sessionMonitor.cancel();
+		if (sessionMonitor != null) {
+			this.sessionMonitor.cancel();
+		}
 		this.sessionCache.clear();
 	}
 
@@ -419,7 +426,7 @@ public class SessionServiceImpl implements SessionService {
 		return securityHelper;
 	}
 
-    protected static String getBaseUsername(String username) {
+    static String getBaseUsername(String username) {
         if (username == null) {
             return username;
         }
@@ -542,16 +549,22 @@ public class SessionServiceImpl implements SessionService {
 		if (securityDomain == null ) {
 			 throw new LogonException(RuntimePlugin.Event.TEIID40059, RuntimePlugin.Util.gs(RuntimePlugin.Event.TEIID40059));
 		}
-		return neogitiateGssLogin(securityDomain, serviceTicket);
+		return this.securityHelper.negotiateGssLogin(securityDomain, serviceTicket);
 	}
 	
 	public AuthenticationType getDefaultAuthenticationType() {
 		return defaultAuthenticationType;
 	}
-
-	protected GSSResult neogitiateGssLogin(String securityDomain,
-			byte[] serviceTicket) throws LoginException {
-		// must be overridden in platform specific security domain
-		return null;
-	}
+	
+    private String getUserName(Subject subject, String userName) {
+        Set<Principal> principals = subject.getPrincipals();
+        for (Principal p:principals) {
+            if (p instanceof Group) {
+                continue;
+            }
+            return p.getName();
+        }
+        return userName;
+    }
+        
 }

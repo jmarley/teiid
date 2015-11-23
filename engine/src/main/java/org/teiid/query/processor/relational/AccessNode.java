@@ -152,6 +152,11 @@ public class AccessNode extends SubqueryAwareRelationalNode {
 	}
 
     public void setShouldEvaluateExpressions(boolean shouldEvaluate) {
+    	if (shouldEvaluate && projection != null) {
+    		//restore the original as we'll minimize each time
+    		((Query)this.command).getSelect().setSymbols(this.originalSelect);
+    		this.projection = null;
+    	}
         this.shouldEvaluate = shouldEvaluate;
     }
 
@@ -247,8 +252,8 @@ public class AccessNode extends SubqueryAwareRelationalNode {
 			if(needProcessing) {
 				registerRequest(atomicCommand);
 			}
-			//We hardcode an upper limit on currency because these commands have potentially large in-memory value sets
-        } while (!processCommandsIndividually() && hasNextCommand() && this.tupleSources.size() < Math.min(MAX_CONCURRENT, this.getContext().getUserRequestSourceConcurrency()));
+			//We use an upper limit here to the currency because these commands have potentially large in-memory value sets
+        } while (!processCommandsIndividually() && hasNextCommand() && this.tupleSources.size() < Math.max(Math.min(MAX_CONCURRENT, this.getContext().getUserRequestSourceConcurrency()), this.getContext().getUserRequestSourceConcurrency()/2));
 	}
 	
 	public boolean isShouldEvaluate() {

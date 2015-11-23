@@ -496,4 +496,36 @@ public class BaseDelegatingExecutionFactory<F, C> extends ExecutionFactory<F, C>
 	public boolean isThreadBound() {
 		return delegate.isThreadBound();
 	}
+	@Override
+	public String getCollationLocale() {
+		return delegate.getCollationLocale();
+	}
+	@Override
+	public boolean supportsRecursiveCommonTableExpressions() {
+		return delegate.supportsRecursiveCommonTableExpressions();
+	}
+	@Override
+	public boolean supportsCompareCriteriaOrderedExclusive() {
+		return delegate.supportsCompareCriteriaOrderedExclusive();
+	}
+	@Override
+	public boolean returnsSingleUpdateCount() {
+		return delegate.returnsSingleUpdateCount();
+	}
+	@Override
+	public boolean supportsPartialFiltering() {
+		return delegate.supportsPartialFiltering();
+	}
+	@Override
+	public boolean useBindingsForDependentJoin() {
+		return delegate.useBindingsForDependentJoin();
+	}
+	@Override
+	public boolean supportsSubqueryCommonTableExpressions() {
+		return delegate.supportsSubqueryCommonTableExpressions();
+	}
+	@Override
+	public boolean supportsCorrelatedSubqueryLimit() {
+		return delegate.supportsCorrelatedSubqueryLimit();
+	}
 }

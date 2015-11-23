@@ -95,6 +95,8 @@ public class ResultsMessage implements Externalizable {
     private boolean delayDeserialization;
     byte[] resultBytes;
 
+	private MultiArrayOutputStream serializationBuffer;
+
     public ResultsMessage(){
     }
 
@@ -313,9 +315,9 @@ public class ResultsMessage implements Externalizable {
         // Results data
         if (delayDeserialization) {
         	BatchSerializer.writeBatch(out, dataTypes, null, clientSerializationVersion);
-        } else {
+    	} else {
         	BatchSerializer.writeBatch(out, dataTypes, results, clientSerializationVersion);
-        }
+    	}
         
         // Plan descriptions
         out.writeObject(this.planDescription);
@@ -327,12 +329,10 @@ public class ResultsMessage implements Externalizable {
         }
         
         if (delayDeserialization && results != null) {
-            MultiArrayOutputStream baos = new MultiArrayOutputStream(1 << 13);
-            CompactObjectOutputStream oos = new CompactObjectOutputStream(baos);
-            BatchSerializer.writeBatch(oos, dataTypes, results, clientSerializationVersion);
-            oos.close();
-            out.writeInt(baos.getCount());
-            baos.writeTo(out);
+            serialize(true);
+            out.writeInt(serializationBuffer.getCount());
+            serializationBuffer.writeTo(out);
+            serializationBuffer = null;
         }
         
         if (this.warnings != null) {
@@ -355,6 +355,25 @@ public class ResultsMessage implements Externalizable {
         	out.writeInt(updateCount);
         }
     }
+
+    /**
+     * Serialize the result data
+     * @return the size of the data bytes
+     * @throws IOException
+     */
+	public int serialize(boolean keepSerialization) throws IOException {
+		if (serializationBuffer == null) {
+			serializationBuffer = new MultiArrayOutputStream(1 << 13);
+			CompactObjectOutputStream oos = new CompactObjectOutputStream(serializationBuffer);
+			BatchSerializer.writeBatch(oos, dataTypes, results, clientSerializationVersion);
+			oos.close();
+		}
+		int result = serializationBuffer.getCount();
+		if (!keepSerialization) {
+			serializationBuffer = null;
+		}
+		return result;
+	}
 
     /**
      * @return

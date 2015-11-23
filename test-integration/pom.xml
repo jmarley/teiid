@@ -3,7 +3,7 @@
 	<parent>
 		<artifactId>teiid-parent</artifactId>
 		<groupId>org.jboss.teiid</groupId>
-        <version>8.8.0.Beta2-SNAPSHOT</version>
+        <version>8.13.0.Alpha1-SNAPSHOT</version>
 	</parent>
 	<modelVersion>4.0.0</modelVersion>
 	<artifactId>teiid-test-integration</artifactId>
@@ -45,7 +45,11 @@
         <dependency>
             <groupId>org.jboss.teiid</groupId>
             <artifactId>teiid-admin</artifactId>
-        </dependency>        
+        </dependency>  
+        <dependency>
+            <groupId>org.jboss.teiid</groupId>
+            <artifactId>teiid-jboss-admin</artifactId>
+        </dependency>               
 		<dependency>
 			<groupId>org.jboss.teiid</groupId>
 			<artifactId>teiid-client</artifactId>
@@ -70,17 +74,16 @@
 			<groupId>org.apache.derby</groupId>
 			<artifactId>derby</artifactId>
 		</dependency>
-		
-		<dependency>
-      		<groupId>javax.resource</groupId>
-      		<artifactId>connector-api</artifactId>
-      		<scope>provided</scope>
-    	</dependency>
-    	
-    	<dependency>
-			<groupId>javax.transaction</groupId>
-            <artifactId>jta</artifactId>
-		</dependency>
+	    <dependency>
+	        <groupId>org.jboss.spec.javax.transaction</groupId>
+	        <artifactId>jboss-transaction-api_1.2_spec</artifactId>
+	        <scope>provided</scope>
+	    </dependency>
+	    <dependency>
+	        <groupId>org.jboss.spec.javax.resource</groupId>
+	        <artifactId>jboss-connector-api_1.7_spec</artifactId>
+	        <scope>provided</scope>
+	    </dependency>
 		<dependency>
 			<groupId>org.jboss</groupId>
 			<artifactId>jboss-vfs</artifactId>
@@ -91,14 +94,14 @@
 			<artifactId>jboss-logging</artifactId>
 			<scope>test</scope>        
 		</dependency>
-		<dependency>
+<!-- 		<dependency>
 			<groupId>org.jboss.as</groupId>
 			<artifactId>jboss-as-clustering-jgroups</artifactId>
 			<scope>test</scope> 
-		</dependency> 
+		</dependency> --> 
 		<dependency>
 			<groupId>io.netty</groupId>
-			<artifactId>netty</artifactId>
+			<artifactId>netty-all</artifactId>
 			<scope>test</scope> 
 		</dependency>
      

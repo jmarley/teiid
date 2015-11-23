@@ -525,7 +525,7 @@ public class TestDDLParser {
 	}
 	
 	@Test(expected=MetadataException.class) public void testInvalidFunctionBody() throws Exception {
-		String ddl = "CREATE FUNCTION SourceFunc(flag boolean) RETURNS varchar AS SELECT 'a';";
+		String ddl = "CREATE FOREIGN FUNCTION SourceFunc(flag boolean) RETURNS varchar AS SELECT 'a';";
 
 		Schema s = helpParse(ddl, "model").getSchema();
 		
@@ -604,7 +604,34 @@ public class TestDDLParser {
 		assertTrue("Table not found", tableMap.containsKey("G1"));
 		assertTrue("Table not found", tableMap.containsKey("G2"));
 		assertEquals("FOR EACH ROW\nBEGIN ATOMIC\nINSERT INTO g1 (e1, e2) VALUES (1, 'trig');\nEND", s.getTable("G1").getInsertPlan());
+	}
+	
+	@Test
+	public void testInsteadOfTriggerIsDistinct() throws Exception {
+		String ddl = 	"CREATE VIEW G1( e1 integer, e2 varchar) AS select * from foo;" +
+						"CREATE TRIGGER ON G1 INSTEAD OF UPDATE AS " +
+						"FOR EACH ROW \n" +
+						"BEGIN ATOMIC \n" +
+						"if (\"new\" is not distinct from \"old\") raise sqlexception 'error';\n" +
+						"END;";
+
+		Schema s = helpParse(ddl, "model").getSchema();
+		
+		assertEquals("FOR EACH ROW\nBEGIN ATOMIC\nIF(\"new\" IS NOT DISTINCT FROM \"old\")\nBEGIN\nRAISE SQLEXCEPTION 'error';\nEND\nEND", s.getTable("G1").getUpdatePlan());
+	}
+	
+	@Test(expected=MetadataException.class)
+	public void testInsteadOfTriggerNoView() throws Exception {
+		String ddl = 	"CREATE TRIGGER ON G1 INSTEAD OF INSERT AS " +
+						"FOR EACH ROW \n" +
+						"BEGIN ATOMIC \n" +
+						"insert into g1 (e1, e2) values (1, 'trig');\n" +
+						"END;" +
+						"CREATE View G2( e1 integer, e2 varchar) AS select * from foo;";
+
+		helpParse(ddl, "model");
 	}	
+
 	
 	@Test
 	public void testSourceProcedure() throws Exception {
@@ -722,8 +749,8 @@ public class TestDDLParser {
 	@Test public void testKeyResolve() {
 		MetadataFactory mf = new MetadataFactory(null, 1, "foo", getDataTypes(), new Properties(), null);
 		mf.addNamespace("x", "http://x");
-		assertEquals("{http://x}z", SQLParserUtil.resolvePropertyKey(mf, "x:z"));
-		assertEquals("y:z", SQLParserUtil.resolvePropertyKey(mf, "y:z"));
+		assertEquals("{http://x}z", MetadataFactory.resolvePropertyKey(mf, "x:z"));
+		assertEquals("y:z", MetadataFactory.resolvePropertyKey(mf, "y:z"));
 	}
 	
 	@Test public void testCreateError() {

@@ -42,6 +42,7 @@ public class PreOrPostOrderNavigator extends AbstractNavigator {
     
     private boolean order;
     private boolean deep;
+	private boolean skipEvaluatable;
     
     public PreOrPostOrderNavigator(LanguageVisitor visitor, boolean order, boolean deep) {
         super(visitor);
@@ -171,7 +172,7 @@ public class PreOrPostOrderNavigator extends AbstractNavigator {
     }
     public void visit(ExistsCriteria obj) {
         preVisitVisitor(obj);
-        if (deep) {
+        if (deep && (!obj.shouldEvaluate() || !skipEvaluatable)) {
         	visitNode(obj.getCommand());
         }
         postVisitVisitor(obj);        
@@ -322,7 +323,7 @@ public class PreOrPostOrderNavigator extends AbstractNavigator {
     }
     public void visit(ScalarSubquery obj) {
         preVisitVisitor(obj);
-        if (deep) {
+        if (deep && (!obj.shouldEvaluate() || !skipEvaluatable)) {
         	visitNode(obj.getCommand());
         }
         postVisitVisitor(obj);
@@ -530,6 +531,21 @@ public class PreOrPostOrderNavigator extends AbstractNavigator {
     }
     
     @Override
+    public void visit(XMLExists obj) {
+    	preVisitVisitor(obj);
+    	visitNode(obj.getXmlQuery().getNamespaces());
+    	visitNodes(obj.getXmlQuery().getPassing());
+        postVisitVisitor(obj);
+    }
+    
+    @Override
+    public void visit(XMLCast obj) {
+    	preVisitVisitor(obj);
+    	visitNode(obj.getExpression());
+        postVisitVisitor(obj);
+    }
+    
+    @Override
     public void visit(DerivedColumn obj) {
     	preVisitVisitor(obj);
     	visitNode(obj.getExpression());
@@ -660,6 +676,15 @@ public class PreOrPostOrderNavigator extends AbstractNavigator {
     	postVisitVisitor(obj);
     }
     
+    @Override
+    public void visit(IsDistinctCriteria obj) {
+    	preVisitVisitor(obj);
+    	//don't visit as that will fail the validation that scalar/row value groupsymbols can't be referenced
+    	//visitNode(obj.getLeftRowValue());
+    	//visitNode(obj.getRightRowValue());
+    	postVisitVisitor(obj);
+    }
+    
     public static void doVisit(LanguageObject object, LanguageVisitor visitor, boolean order) {
     	doVisit(object, visitor, order, false);
     }
@@ -668,5 +693,9 @@ public class PreOrPostOrderNavigator extends AbstractNavigator {
         PreOrPostOrderNavigator nav = new PreOrPostOrderNavigator(visitor, order, deep);
         object.acceptVisitor(nav);
     }
+    
+    public void setSkipEvaluatable(boolean skipEvaluatable) {
+		this.skipEvaluatable = skipEvaluatable;
+	}
 
 }

@@ -147,6 +147,8 @@ public class TransformationMetadata extends BasicQueryMetadata implements Serial
     private Map<String, Object> groupInfoCache = Collections.synchronizedMap(new LRUCache<String, Object>(250));
     private Map<String, Collection<Table>> partialNameToFullNameCache = Collections.synchronizedMap(new LRUCache<String, Collection<Table>>(1000));
     private Map<String, Collection<StoredProcedureInfo>> procedureCache = Collections.synchronizedMap(new LRUCache<String, Collection<StoredProcedureInfo>>(200));
+
+	private boolean widenComparisonToString = true;
     /**
      * TransformationMetadata constructor
      * @param context Object containing the info needed to lookup metadta.
@@ -432,7 +434,7 @@ public class TransformationMetadata extends BasicQueryMetadata implements Serial
         }
     }
 
-    public Object getDefaultValue(final Object elementID) throws TeiidComponentException, QueryMetadataException {
+    public String getDefaultValue(final Object elementID) throws TeiidComponentException, QueryMetadataException {
         if(elementID instanceof Column) {
             return ((Column) elementID).getDefaultValue();            
         } else if(elementID instanceof ProcedureParameter){
@@ -563,6 +565,8 @@ public class TransformationMetadata extends BasicQueryMetadata implements Serial
                     return (columnRecord.getSearchType() == SearchType.Searchable || columnRecord.getSearchType() == SearchType.All_Except_Like);
                 case SupportConstants.Element.SEARCHABLE_LIKE:
                 	return (columnRecord.getSearchType() == SearchType.Searchable || columnRecord.getSearchType() == SearchType.Like_Only);
+                case SupportConstants.Element.SEARCHABLE_EQUALITY:
+                    return (columnRecord.getSearchType() == SearchType.Equality_Only || columnRecord.getSearchType() == SearchType.Searchable || columnRecord.getSearchType() == SearchType.All_Except_Like);
                 case SupportConstants.Element.SELECT:
                     return columnRecord.isSelectable();
                 case SupportConstants.Element.UPDATE:
@@ -618,7 +622,7 @@ public class TransformationMetadata extends BasicQueryMetadata implements Serial
     }
     
     private IllegalArgumentException createInvalidRecordTypeException(Object elementID) {
-        return new IllegalArgumentException(QueryPlugin.Util.getString("TransformationMetadata.Invalid_type", elementID.getClass().getName()));         //$NON-NLS-1$
+        return new IllegalArgumentException(QueryPlugin.Util.getString("TransformationMetadata.Invalid_type", elementID!=null?elementID.getClass().getName():null));         //$NON-NLS-1$
     }
 
     public int getMaxSetSize(final Object modelID) throws TeiidComponentException, QueryMetadataException {
@@ -1064,7 +1068,7 @@ public class TransformationMetadata extends BasicQueryMetadata implements Serial
 	}
 	
 	@Override
-	public QueryMetadataInterface getDesignTimeMetadata() {
+	public TransformationMetadata getDesignTimeMetadata() {
 		TransformationMetadata tm = new TransformationMetadata(store, functionLibrary);
 		tm.groupInfoCache = this.groupInfoCache;
 		tm.metadataCache = this.metadataCache;
@@ -1073,6 +1077,7 @@ public class TransformationMetadata extends BasicQueryMetadata implements Serial
 		tm.scriptEngineManager = this.scriptEngineManager;
 		tm.importedModels = this.importedModels;
 		tm.allowedLanguages = this.allowedLanguages;
+		tm.widenComparisonToString = this.widenComparisonToString;
 		return tm;
 	}
 	
@@ -1151,6 +1156,15 @@ public class TransformationMetadata extends BasicQueryMetadata implements Serial
 	
 	public void setUseOutputNames(boolean useOutputNames) {
 		this.useOutputNames = useOutputNames;
+	}
+	
+	@Override
+	public boolean widenComparisonToString() {
+		return widenComparisonToString;
+	}
+	
+	public void setWidenComparisonToString(boolean widenComparisonToString) {
+		this.widenComparisonToString = widenComparisonToString;
 	}
 	
 }

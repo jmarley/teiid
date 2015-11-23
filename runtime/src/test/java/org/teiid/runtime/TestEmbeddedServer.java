@@ -29,14 +29,11 @@ import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.StringReader;
 import java.net.InetSocketAddress;
-import java.sql.CallableStatement;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.ResultSetMetaData;
-import java.sql.Statement;
+import java.sql.*;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.List;
 import java.util.Properties;
@@ -45,6 +42,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import javax.resource.spi.XATerminator;
 import javax.transaction.*;
 
 import org.junit.After;
@@ -52,14 +50,23 @@ import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mockito;
 import org.postgresql.Driver;
+import org.teiid.CommandContext;
+import org.teiid.PreParser;
 import org.teiid.adminapi.Model.Type;
 import org.teiid.adminapi.impl.ModelMetaData;
+import org.teiid.common.buffer.BufferManager;
+import org.teiid.common.buffer.impl.BufferFrontedFileStoreCache;
+import org.teiid.common.buffer.impl.FileStorageManager;
+import org.teiid.common.buffer.impl.SplittableStorageManager;
+import org.teiid.common.queue.FakeWorkManager;
 import org.teiid.core.types.DataTypeManager;
 import org.teiid.core.types.InputStreamFactory;
 import org.teiid.core.types.SQLXMLImpl;
 import org.teiid.core.util.ObjectConverterUtil;
+import org.teiid.core.util.SimpleMock;
 import org.teiid.core.util.UnitTestUtil;
 import org.teiid.deployers.VirtualDatabaseException;
+import org.teiid.jdbc.SQLStates;
 import org.teiid.jdbc.TeiidDriver;
 import org.teiid.jdbc.TeiidSQLException;
 import org.teiid.language.Command;
@@ -84,7 +91,107 @@ import org.teiid.transport.WireProtocol;
 
 @SuppressWarnings("nls")
 public class TestEmbeddedServer {
-	private final class MockTransactionManager implements TransactionManager {
+	private static final class FakeTranslator extends
+			ExecutionFactory<AtomicInteger, Object> {
+		
+		private boolean batch;
+		
+		public FakeTranslator(boolean batch) {
+			this.batch = batch;
+		}
+		
+		@Override
+		public Object getConnection(AtomicInteger factory)
+				throws TranslatorException {
+			return factory.incrementAndGet();
+		}
+
+		@Override
+		public void closeConnection(Object connection, AtomicInteger factory) {
+			
+		}
+		
+		@Override
+		public boolean supportsBulkUpdate() {
+			return true;
+		}
+
+		@Override
+		public void getMetadata(MetadataFactory metadataFactory, Object conn)
+				throws TranslatorException {
+			assertEquals(conn, Integer.valueOf(1));
+			Table t = metadataFactory.addTable("my-table");
+			t.setSupportsUpdate(true);
+			Column c = metadataFactory.addColumn("my-column", TypeFacility.RUNTIME_NAMES.STRING, t);
+			c.setUpdatable(true);
+		}
+
+		@Override
+		public ResultSetExecution createResultSetExecution(
+				QueryExpression command, ExecutionContext executionContext,
+				RuntimeMetadata metadata, Object connection)
+				throws TranslatorException {
+			ResultSetExecution rse = new ResultSetExecution() {
+				
+				@Override
+				public void execute() throws TranslatorException {
+					
+				}
+				
+				@Override
+				public void close() {
+					
+				}
+				
+				@Override
+				public void cancel() throws TranslatorException {
+					
+				}
+				
+				@Override
+				public List<?> next() throws TranslatorException, DataNotAvailableException {
+					return null;
+				}
+			};
+			return rse;
+		}
+
+		@Override
+		public UpdateExecution createUpdateExecution(Command command,
+				ExecutionContext executionContext,
+				RuntimeMetadata metadata, Object connection)
+				throws TranslatorException {
+			UpdateExecution ue = new UpdateExecution() {
+				
+				@Override
+				public void execute() throws TranslatorException {
+					
+				}
+				
+				@Override
+				public void close() {
+					
+				}
+				
+				@Override
+				public void cancel() throws TranslatorException {
+					
+				}
+				
+				@Override
+				public int[] getUpdateCounts() throws DataNotAvailableException,
+						TranslatorException {
+					if (!batch) {
+						return new int[] {2};
+					}
+					return new int[] {1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1};
+				}
+			};
+			return ue;
+		}
+	}
+
+	public static final class MockTransactionManager implements TransactionManager {
 		ThreadLocal<Transaction> txns = new ThreadLocal<Transaction>();
 		List<Transaction> txnHistory = new ArrayList<Transaction>();
 
@@ -161,6 +268,11 @@ public class TestEmbeddedServer {
 			txnHistory.add(t);
 			txns.set(t);
 		}
+
+		public void reset() {
+			txnHistory.clear();
+			txns = new ThreadLocal<Transaction>();
+		}
 	}
 
 	EmbeddedServer es;
@@ -178,89 +290,7 @@ public class TestEmbeddedServer {
 		ec.setUseDisk(false);
 		es.start(ec);
 		
-		es.addTranslator("y", new ExecutionFactory<AtomicInteger, Object> () {
-			@Override
-			public Object getConnection(AtomicInteger factory)
-					throws TranslatorException {
-				return factory.incrementAndGet();
-			}
-			
-			@Override
-			public void closeConnection(Object connection, AtomicInteger factory) {
-				
-			}
-			
-			@Override
-			public void getMetadata(MetadataFactory metadataFactory, Object conn)
-					throws TranslatorException {
-				assertEquals(conn, Integer.valueOf(1));
-				Table t = metadataFactory.addTable("my-table");
-				t.setSupportsUpdate(true);
-				Column c = metadataFactory.addColumn("my-column", TypeFacility.RUNTIME_NAMES.STRING, t);
-				c.setUpdatable(true);
-			}
-			
-			@Override
-			public ResultSetExecution createResultSetExecution(
-					QueryExpression command, ExecutionContext executionContext,
-					RuntimeMetadata metadata, Object connection)
-					throws TranslatorException {
-				ResultSetExecution rse = new ResultSetExecution() {
-					
-					@Override
-					public void execute() throws TranslatorException {
-						
-					}
-					
-					@Override
-					public void close() {
-						
-					}
-					
-					@Override
-					public void cancel() throws TranslatorException {
-						
-					}
-					
-					@Override
-					public List<?> next() throws TranslatorException, DataNotAvailableException {
-						return null;
-					}
-				};
-				return rse;
-			}
-			
-			@Override
-			public UpdateExecution createUpdateExecution(Command command,
-					ExecutionContext executionContext,
-					RuntimeMetadata metadata, Object connection)
-					throws TranslatorException {
-				UpdateExecution ue = new UpdateExecution() {
-					
-					@Override
-					public void execute() throws TranslatorException {
-						
-					}
-					
-					@Override
-					public void close() {
-						
-					}
-					
-					@Override
-					public void cancel() throws TranslatorException {
-						
-					}
-					
-					@Override
-					public int[] getUpdateCounts() throws DataNotAvailableException,
-							TranslatorException {
-						return new int[] {2};
-					}
-				};
-				return ue;
-			}
-		});
+		es.addTranslator("y", new FakeTranslator(false));
 		final AtomicInteger counter = new AtomicInteger();
 		ConnectionFactoryProvider<AtomicInteger> cfp = new EmbeddedServer.SimpleConnectionFactoryProvider<AtomicInteger>(counter);
 		
@@ -295,6 +325,45 @@ public class TestEmbeddedServer {
 		
 		assertNotNull(es.getSchemaDdl("empty", "SYS"));
 		assertNull(es.getSchemaDdl("empty", "xxx"));
+	}
+	
+	@Test public void testBatchedUpdate() throws Exception {
+		EmbeddedConfiguration ec = new EmbeddedConfiguration();
+		
+		ec.setUseDisk(false);
+		es.bufferService.setProcessorBatchSize(1);
+		es.start(ec);
+		
+		es.addTranslator("y", new FakeTranslator(true));
+		final AtomicInteger counter = new AtomicInteger();
+		ConnectionFactoryProvider<AtomicInteger> cfp = new EmbeddedServer.SimpleConnectionFactoryProvider<AtomicInteger>(counter);
+		
+		es.addConnectionFactoryProvider("z", cfp);
+		
+		ModelMetaData mmd = new ModelMetaData();
+		mmd.setName("my-schema");
+		mmd.addSourceMapping("x", "y", "z");
+		es.deployVDB("test", mmd);
+		
+		Connection c = es.getDriver().connect("jdbc:teiid:test", null);
+		PreparedStatement ps = c.prepareStatement("insert into \"my-table\" values (?)");
+		for (int i = 0; i < 16; i++) {
+		ps.setString(1, "a");
+		ps.addBatch();
+		}
+		int[] result = ps.executeBatch();
+		assertArrayEquals(new int[] {1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1, 1, 1, -1, 1}, result);
+	}
+	
+	@Test(expected=VirtualDatabaseException.class) 
+	public void testInvalidName() throws Exception {
+		es.start(new EmbeddedConfiguration());
+		ModelMetaData mmd1 = new ModelMetaData();
+		mmd1.setName("virt.1");
+		mmd1.setModelType(Type.VIRTUAL);
+		mmd1.setSchemaSourceType("ddl");
+		mmd1.setSchemaText("create view \"my-view\" as select 1");
+		es.deployVDB("x", mmd1);
 	}
 	
 	@Test public void testDeployZip() throws Exception {
@@ -343,7 +412,8 @@ public class TestEmbeddedServer {
 		assertEquals("HELLO WORLD", rs.getString(1));
 	}
 	
-	@Test public void testRemoteJDBCTrasport() throws Exception {
+	@Test 
+	public void testRemoteJDBCTrasport() throws Exception {
 		SocketConfiguration s = new SocketConfiguration();
 		InetSocketAddress addr = new InetSocketAddress(0);
 		s.setBindAddress(addr.getHostName());
@@ -357,6 +427,7 @@ public class TestEmbeddedServer {
 		try {
 			TeiidDriver driver = new TeiidDriver();
 			conn = driver.connect("jdbc:teiid:test@mm://"+addr.getHostName()+":"+es.transports.get(0).getPort(), null);
+			conn.createStatement().execute("set showplan on"); //trigger alternative serialization for byte count
 			ResultSet rs = conn.createStatement().executeQuery("select * from helloworld");
 			rs.next();
 			assertEquals("HELLO WORLD", rs.getString(1));
@@ -906,6 +977,487 @@ public class TestEmbeddedServer {
 		s.close();
 		
 		assertTrue(closed.get());
+	}
+	
+	@Test public void testUndeploy() throws Exception { 
+		es.start(new EmbeddedConfiguration());
+		es.deployVDB(new ByteArrayInputStream("<vdb name=\"test\" version=\"1\"><model type=\"VIRTUAL\" name=\"test\"><metadata type=\"DDL\"><![CDATA[CREATE view x as select 1;]]> </metadata></model></vdb>".getBytes()));
+		Connection c = es.getDriver().connect("jdbc:teiid:test", null);
+		assertTrue(c.isValid(10));
+		es.undeployVDB("test");
+		assertTrue(!c.isValid(10));
+	}
+	
+	@Test public void testQueryTimeout() throws Exception {
+		es.start(new EmbeddedConfiguration());
+		es.addTranslator("foo", new ExecutionFactory() {
+			@Override
+			public boolean isSourceRequired() {
+				return false;
+			}
+			
+			@Override
+			public ResultSetExecution createResultSetExecution(
+					QueryExpression command, ExecutionContext executionContext,
+					RuntimeMetadata metadata, Object connection)
+					throws TranslatorException {
+				try {
+					Thread.sleep(5000);
+				} catch (InterruptedException e) {
+				}
+				return super.createResultSetExecution(command, executionContext, metadata,
+						connection);
+			}
+			
+		});
+		es.deployVDB(new ByteArrayInputStream("<vdb name=\"test\" version=\"1\"><model name=\"test\"><source name=\"foo\" translator-name=\"foo\"/><metadata type=\"DDL\"><![CDATA[CREATE foreign table x (y xml);]]> </metadata></model></vdb>".getBytes()));
+		Connection c = es.getDriver().connect("jdbc:teiid:test", null);
+		Statement s = c.createStatement();
+		s.setQueryTimeout(1);
+		try {
+			s.execute("select * from x");
+			fail();
+		} catch (SQLException e) {
+			assertEquals(SQLStates.QUERY_CANCELED, e.getSQLState());
+		}
+		
+	}
+	
+	@Test
+	public void testMultipleEmbeddedServerInOneVM() throws TranslatorException {
+		es.addTranslator(MyEFES1.class);
+		es.start(new EmbeddedConfiguration());
+		assertTrue(isES1started);
+
+		EmbeddedServer es2 = new EmbeddedServer();
+		es2.start(new EmbeddedConfiguration());
+		es2.addTranslator(MyEFES2.class);
+		assertTrue(isES2started);
+		es2.stop();
+	}
+
+	public static boolean isES1started;
+	public static boolean isES2started;
+
+	public static class MyEFES1 extends ExecutionFactory<Void, Void> {
+
+		@Override
+		public void start() throws TranslatorException {
+			isES1started = true;
+		}
+	}
+
+	public static class MyEFES2 extends ExecutionFactory<Void, Void> {
+
+		@Override
+		public void start() throws TranslatorException {
+			isES2started = true;
+		}
+	}
+
+    //@Test 
+    public void testExternalMaterializationManagement() throws Exception {
+        EmbeddedConfiguration ec = new EmbeddedConfiguration();
+        ec.setUseDisk(false);
+        ec.setTransactionManager(SimpleMock.createSimpleMock(TransactionManager.class));
+        es.transactionService.setXaTerminator(SimpleMock.createSimpleMock(XATerminator.class));
+        es.transactionService.setWorkManager(new FakeWorkManager());
+        
+        es.start(ec);
+        es.transactionService.setDetectTransactions(false);
+        
+        final AtomicBoolean firsttime = new AtomicBoolean(true);
+        final AtomicInteger loadingCount = new AtomicInteger();
+        final AtomicInteger loading = new AtomicInteger();
+        final AtomicInteger loaded = new AtomicInteger();
+        final AtomicInteger matviewCount = new AtomicInteger();
+        final AtomicInteger tableCount = new AtomicInteger();
+        final AtomicInteger loadedCount = new AtomicInteger();
+        
+        es.addTranslator("y", new ExecutionFactory<AtomicInteger, Object> () {
+            public boolean supportsCompareCriteriaEquals() {
+                return true;
+            }
+            
+            @Override
+            public Object getConnection(AtomicInteger factory)
+                    throws TranslatorException {
+                return factory.incrementAndGet();
+            }
+            
+            @Override
+            public void closeConnection(Object connection, AtomicInteger factory) {
+                
+            }
+            
+            @Override
+            public void getMetadata(MetadataFactory metadataFactory, Object conn)
+                    throws TranslatorException {
+                assertEquals(conn, Integer.valueOf(1));
+                Table t = metadataFactory.addTable("my_table");
+                t.setSupportsUpdate(true);
+                Column c = metadataFactory.addColumn("my_column", TypeFacility.RUNTIME_NAMES.STRING, t);
+                c.setUpdatable(true);
+                
+                // mat table
+                t = metadataFactory.addTable("mat_table");
+                t.setSupportsUpdate(true);
+                c = metadataFactory.addColumn("my_column", TypeFacility.RUNTIME_NAMES.STRING, t);
+                c.setUpdatable(true);
+
+                // status table
+                t = metadataFactory.addTable("status");
+                t.setSupportsUpdate(true);
+                c = metadataFactory.addColumn("VDBName", TypeFacility.RUNTIME_NAMES.STRING, t);
+                c.setUpdatable(true);
+                c = metadataFactory.addColumn("VDBVersion", TypeFacility.RUNTIME_NAMES.STRING, t);
+                c.setUpdatable(true);
+                c = metadataFactory.addColumn("SchemaName", TypeFacility.RUNTIME_NAMES.STRING, t);
+                c.setUpdatable(true);
+                c = metadataFactory.addColumn("Name", TypeFacility.RUNTIME_NAMES.STRING, t);
+                c.setUpdatable(true);
+                c = metadataFactory.addColumn("TargetSchemaName", TypeFacility.RUNTIME_NAMES.STRING, t);
+                c.setUpdatable(true);
+                c = metadataFactory.addColumn("TargetName", TypeFacility.RUNTIME_NAMES.STRING, t);
+                c.setUpdatable(true);
+                c = metadataFactory.addColumn("Valid", TypeFacility.RUNTIME_NAMES.BOOLEAN, t);
+                c.setUpdatable(true);
+                c = metadataFactory.addColumn("LoadState", TypeFacility.RUNTIME_NAMES.STRING, t);
+                c.setUpdatable(true);
+                c = metadataFactory.addColumn("Cardinality", TypeFacility.RUNTIME_NAMES.INTEGER, t);
+                c.setUpdatable(true);
+                c = metadataFactory.addColumn("Updated", TypeFacility.RUNTIME_NAMES.TIMESTAMP, t);
+                c.setUpdatable(true);
+                c = metadataFactory.addColumn("LoadNumber", TypeFacility.RUNTIME_NAMES.LONG, t);
+                c.setUpdatable(true);
+                metadataFactory.addPrimaryKey("PK", Arrays.asList("VDBName", "VDBVersion", "SchemaName", "Name"), t);
+            }
+            
+            @Override
+            public ResultSetExecution createResultSetExecution(
+                final QueryExpression command, final ExecutionContext executionContext,
+                final RuntimeMetadata metadata, final Object connection)
+                throws TranslatorException {
+                
+                return new ResultSetExecution() {
+                    @Override
+                    public void execute() throws TranslatorException {
+                    }
+                    @Override
+                    public void close() {
+                    }
+                    @Override
+                    public void cancel() throws TranslatorException {
+                    }
+                    @Override
+                    public List<?> next() throws TranslatorException, DataNotAvailableException {
+                        String status = "SELECT status.TargetSchemaName, status.TargetName, status.Valid, "
+                                + "status.LoadState, status.Updated, status.Cardinality, status.LoadNumber "
+                                + "FROM status WHERE status.VDBName = 'test' AND status.VDBVersion = '1' "
+                                + "AND status.SchemaName = 'virt' AND status.Name = 'my_view'";
+                        if (command.toString().equals(status)) {
+                            if (loading.get() == 1 && loadingCount.getAndIncrement() == 0) {
+                                return Arrays.asList(null, "mat_table", false, "LOADING", new Timestamp(System.currentTimeMillis()), -1, new Integer(1));                                
+                            }
+                            if (loaded.get() == 1 && loadedCount.getAndIncrement() == 0) {
+                                return Arrays.asList(null, "mat_table", false, "LOADED", new Timestamp(System.currentTimeMillis()), -1, new Integer(1));
+                            }
+                        }
+                        
+                        if (command.toString().startsWith("SELECT status.SchemaName, status.Name, status.Valid, status.LoadState FROM status")) {
+                            if (loading.get() == 1 && loadingCount.getAndIncrement() == 0) {
+                                return Arrays.asList("virt", "my_view", false, "LOADING", new Timestamp(System.currentTimeMillis()), -1, new Integer(1));                                
+                            }
+                            if (loaded.get() == 1 && loadedCount.getAndIncrement() == 0) {
+                                return Arrays.asList("virt", "my_view", true, "LOADED");
+                            }
+                        }
+                        
+                        if (command.toString().equals("SELECT mat_table.my_column FROM mat_table")) {
+                            if (loaded.get() == 1 && matviewCount.getAndIncrement() == 0) {
+                                return Arrays.asList("mat_column");
+                            }
+                        }
+                        
+                        if (command.toString().equals("SELECT my_table.my_column FROM my_table")) {
+                            if (tableCount.getAndIncrement() == 0) {
+                                return Arrays.asList("regular_column");
+                            }
+                        }
+                        tableCount.set(0);
+                        matviewCount.set(0);
+                        loadingCount.set(0);
+                        loadedCount.set(0);
+                        return null;
+                    }
+                };
+            }
+        
+            @Override
+            public UpdateExecution createUpdateExecution(final Command command,
+                    final ExecutionContext executionContext,
+                    final RuntimeMetadata metadata, final Object connection)
+                    throws TranslatorException {
+                UpdateExecution ue = new UpdateExecution() {
+                    
+                    @Override
+                    public void execute() throws TranslatorException {
+                        if (command.toString().startsWith("INSERT INTO status") || command.toString().startsWith("UPDATE status SET")) {
+                            loading.set(command.toString().indexOf("LOADING") != -1 ? 1:0);
+                            loaded.set(command.toString().indexOf("LOADED") != -1? 1:0);
+                        }
+                    }
+                    
+                    @Override
+                    public void close() {
+                        
+                    }
+                    
+                    @Override
+                    public void cancel() throws TranslatorException {
+                        
+                    }
+                    
+                    @Override
+                    public int[] getUpdateCounts() throws DataNotAvailableException,
+                            TranslatorException {
+                        return new int[] {1};
+                    }
+                };
+                return ue;
+            }
+        });
+        final AtomicInteger counter = new AtomicInteger();
+        ConnectionFactoryProvider<AtomicInteger> cfp = new EmbeddedServer.SimpleConnectionFactoryProvider<AtomicInteger>(counter);
+        
+        es.addConnectionFactoryProvider("z", cfp);
+        
+        ModelMetaData mmd = new ModelMetaData();
+        mmd.setName("my_schema");
+        mmd.addSourceMapping("x", "y", "z");
+
+        ModelMetaData mmd1 = new ModelMetaData();
+        mmd1.setName("virt");
+        mmd1.setModelType(Type.VIRTUAL);
+        mmd1.setSchemaSourceType("ddl");
+        mmd1.setSchemaText("create view my_view OPTIONS (" +
+                "UPDATABLE 'true',MATERIALIZED 'TRUE',\n" + 
+                "MATERIALIZED_TABLE 'my_schema.mat_table', \n" + 
+                "\"teiid_rel:MATERIALIZED_STAGE_TABLE\" 'my_schema.mat_table',\n" + 
+                "\"teiid_rel:ALLOW_MATVIEW_MANAGEMENT\" 'true', \n" + 
+                "\"teiid_rel:MATVIEW_STATUS_TABLE\" 'my_schema.status', \n" + 
+                "\"teiid_rel:MATVIEW_SHARE_SCOPE\" 'NONE',\n" + 
+                "\"teiid_rel:MATVIEW_ONERROR_ACTION\" 'THROW_EXCEPTION',\n" + 
+                "\"teiid_rel:MATVIEW_TTL\" 10000)" +
+                "as select * from \"my_table\"");
+
+        es.deployVDB("test", mmd, mmd1);
+        
+        TeiidDriver td = es.getDriver();
+        Connection c = td.connect("jdbc:teiid:test", null);
+        Thread.sleep(3000);
+        Statement s = c.createStatement();
+        ResultSet rs = s.executeQuery("select * from my_view");
+        assertTrue(rs.next());
+        assertEquals("mat_column", rs.getString(1));
+    }
+    
+	@Test public void testPreparedTypeResolving() throws Exception {
+		EmbeddedConfiguration ec = new EmbeddedConfiguration();
+		MockTransactionManager tm = new MockTransactionManager();
+		ec.setTransactionManager(tm);
+		ec.setUseDisk(false);
+		es.start(ec);
+		
+		es.addTranslator("t", new ExecutionFactory<Void, Void>());
+		
+		ModelMetaData mmd1 = new ModelMetaData();
+		mmd1.setName("b");
+		mmd1.setModelType(Type.VIRTUAL);
+		mmd1.setSchemaSourceType("ddl");
+		mmd1.setSchemaText("create view v (i integer) as select 1");
+		
+		es.deployVDB("vdb", mmd1);
+		
+		Connection c = es.getDriver().connect("jdbc:teiid:vdb", null);
+		//should expect a clob
+		PreparedStatement ps = c.prepareStatement("select * from texttable(? columns a string) as x");
+		ps.setCharacterStream(1, new StringReader("a\nb"));
+		assertTrue(ps.execute());
+	}
+	
+	@Test public void testGeometrySelect() throws Exception {
+		EmbeddedConfiguration ec = new EmbeddedConfiguration();
+		ec.setUseDisk(false);
+		es.start(ec);
+		
+		ModelMetaData mmd1 = new ModelMetaData();
+		mmd1.setName("b");
+		mmd1.setModelType(Type.VIRTUAL);
+		mmd1.setSchemaSourceType("ddl");
+		mmd1.setSchemaText("create view v (i geometry) as select ST_GeomFromText('POLYGON ((100 100, 200 200, 75 75, 100 100))')");
+		
+		es.deployVDB("vdb", mmd1);
+		
+		Connection c = es.getDriver().connect("jdbc:teiid:vdb", null);
+		Statement s = c.createStatement();
+		ResultSet rs = s.executeQuery("select * from v");
+		assertEquals("geometry", rs.getMetaData().getColumnTypeName(1));
+		assertEquals(Types.BLOB, rs.getMetaData().getColumnType(1));
+		assertEquals("java.sql.Blob", rs.getMetaData().getColumnClassName(1));
+		rs.next();
+		assertEquals(77, rs.getBlob(1).length());
+	}
+	
+	@Test public void testPreParser() throws Exception {
+		EmbeddedConfiguration ec = new EmbeddedConfiguration();
+		ec.setPreParser(new PreParser() {
+			
+			@Override
+			public String preParse(String command, CommandContext context) {
+				if (command.equals("select 'hello world'")) {
+					return "select 'goodbye'";
+				}
+				return command;
+			}
+		});
+		es.start(ec);
+		ModelMetaData mmd = new ModelMetaData();
+		mmd.setName("y");
+		mmd.setModelType(Type.VIRTUAL);
+		mmd.addSourceMetadata("ddl", "create view dummy as select 1;");
+		es.deployVDB("x", mmd);
+		
+		Connection c = es.getDriver().connect("jdbc:teiid:x", null);
+		Statement s = c.createStatement();
+		ResultSet rs = s.executeQuery("select 'hello world'");
+		rs.next();
+		assertEquals("goodbye", rs.getString(1));
+	}
+	
+	@Test public void testTurnOffLobCleaning() throws Exception {
+		EmbeddedConfiguration ec = new EmbeddedConfiguration();
+		es.start(ec);
+		ModelMetaData mmd = new ModelMetaData();
+		mmd.setName("y");
+		mmd.setModelType(Type.VIRTUAL);
+		mmd.addSourceMetadata("ddl", "create view dummy as select 1;");
+		es.deployVDB("x", mmd);
+
+		Connection c = es.getDriver().connect("jdbc:teiid:x", null);
+		Statement s = c.createStatement();
+		s.execute("select teiid_session_set('clean_lobs_onclose', false)");
+		ResultSet rs = s.executeQuery("WITH t(n) AS ( VALUES (1) UNION ALL SELECT n+1 FROM t WHERE n < 5000 ) SELECT xmlelement(root, xmlagg(xmlelement(val, n))) FROM t");
+		assertTrue(rs.next());
+		SQLXML val = rs.getSQLXML(1);
+		rs.close();
+		assertEquals(73906, val.getString().length());
+	}
+	
+	@Test
+	public void testBufferManagerProperties() throws TranslatorException {
+		EmbeddedConfiguration ec = new EmbeddedConfiguration();
+		
+		ec.setUseDisk(true);
+		ec.setBufferDirectory(System.getProperty("java.io.tmpdir"));
+		ec.setProcessorBatchSize(BufferManager.DEFAULT_PROCESSOR_BATCH_SIZE);
+		ec.setMaxReserveKb(BufferManager.DEFAULT_RESERVE_BUFFER_KB);
+		ec.setMaxProcessingKb(BufferManager.DEFAULT_MAX_PROCESSING_KB);
+		
+		ec.setInlineLobs(true);
+		ec.setMaxOpenFiles(FileStorageManager.DEFAULT_MAX_OPEN_FILES);
+		ec.setMaxBufferSpace(FileStorageManager.DEFAULT_MAX_BUFFERSPACE>>20);
+		ec.setMaxFileSize(SplittableStorageManager.DEFAULT_MAX_FILESIZE);
+		ec.setEncryptFiles(false);
+		
+		ec.setMaxStorageObjectSize(BufferFrontedFileStoreCache.DEFAuLT_MAX_OBJECT_SIZE);
+		ec.setMemoryBufferOffHeap(false);
+		
+		started = false;
+		es.addTranslator(MyEF.class);
+		es.start(ec);
+		assertTrue(started);
+	}
+	
+	@Test(expected=VirtualDatabaseException.class)
+	public void testRequireRoles() throws Exception {
+		EmbeddedConfiguration ec = new EmbeddedConfiguration();
+		es.start(ec);
+		es.repo.setDataRolesRequired(true);
+		
+		ModelMetaData mmd = new ModelMetaData();
+		mmd.setName("y");
+		mmd.setModelType(Type.VIRTUAL);
+		mmd.addSourceMetadata("ddl", "create view dummy as select 1;");
+		es.deployVDB("x", mmd);
+	}
+	
+	@Test public void testSystemSubquery() throws Exception {
+		//already working
+		String query = "SELECT t.Name FROM (select * from SYS.Tables AS t limit 10) as t, (SELECT DISTINCT c.TableName FROM SYS.Columns AS c where c.Name > 'A') AS X__1 WHERE t.Name = X__1.TableName";
+		EmbeddedConfiguration ec = new EmbeddedConfiguration();
+		es.start(ec);
+		ModelMetaData mmd = new ModelMetaData();
+		mmd.setName("x");
+		mmd.setModelType(Type.VIRTUAL);
+		mmd.addSourceMetadata("ddl", "create view v as select 1 as c");
+		es.deployVDB("x", mmd);
+		Connection c = es.getDriver().connect("jdbc:teiid:x", null);
+		Statement s = c.createStatement();
+		extractRowCount(query, s, 10);
+
+		//was throwing exception
+		query = "SELECT t.Name FROM (select * from SYS.Tables AS t limit 10) as t, (SELECT DISTINCT c.TableName FROM SYS.Columns AS c) AS X__1 WHERE t.Name = X__1.TableName";
+		extractRowCount(query, s, 10);
+	}
+
+	private void extractRowCount(String query, Statement s, int count)
+			throws SQLException {
+		s.execute(query);
+		ResultSet rs = s.getResultSet();
+		int i = 0;
+		while (rs.next()) {
+			i++;
+		}
+		assertEquals(count, i);
+	}
+	
+	@Test public void testTempVisibilityToExecuteImmediate() throws Exception {
+		EmbeddedConfiguration ec = new EmbeddedConfiguration();
+		es.start(ec);
+		ModelMetaData mmd = new ModelMetaData();
+		mmd.setName("x");
+		mmd.setModelType(Type.VIRTUAL);
+		mmd.addSourceMetadata("ddl", "create procedure p () as execute immediate 'select 1' as x integer into #temp;");
+		es.deployVDB("x", mmd);
+		Connection c = es.getDriver().connect("jdbc:teiid:x", null);
+		Statement s = c.createStatement();
+		s.execute("create local temporary table #temp (x integer)");
+		s.execute("exec p()");
+		extractRowCount("select * from #temp", s, 0);
+	}
+	
+	@Test public void testSubqueryCache() throws Exception {
+		EmbeddedConfiguration ec = new EmbeddedConfiguration();
+		es.start(ec);
+		ModelMetaData mmd = new ModelMetaData();
+		mmd.setName("x");
+		mmd.setModelType(Type.VIRTUAL);
+		mmd.addSourceMetadata("ddl", ObjectConverterUtil.convertFileToString(UnitTestUtil.getTestDataFile("proc.sql")));
+		es.deployVDB("x", mmd);
+		Connection c = es.getDriver().connect("jdbc:teiid:x", null);
+		Statement s = c.createStatement();
+		String[] statements = ObjectConverterUtil.convertFileToString(UnitTestUtil.getTestDataFile("data.sql")).split(";");
+		for (String statement:statements) {
+			s.execute(statement);
+		}
+		s.execute("set autoCommitTxn off");
+		s.execute("SELECT \"citmp.KoordX\" ,\"citmp.KoordY\" ,( SELECT \"store.insideFence\" FROM ( EXEC point_inside_store ( CAST ( \"citmp.KoordX\" AS float ) ,CAST ( \"citmp.KoordY\" AS float ) ) ) as \"store\" ) as \"insideStore\" ,( SELECT \"firstsection.insideFence\" FROM ( EXEC point_inside_store ( CAST ( \"citmp.KoordX\" AS float ) ,CAST ( \"citmp.KoordY\" AS float ) ) ) as \"firstsection\" ) as \"insideFirstsection\" FROM sample_coords as \"citmp\" ORDER BY insideStore ASC ,insideFirstsection DESC");
+		ResultSet rs = s.getResultSet();
+		while (rs.next()) {
+			//the last two columns should be identical
+			assertEquals(rs.getInt(3), rs.getInt(4));
+		}
 	}
 
 }

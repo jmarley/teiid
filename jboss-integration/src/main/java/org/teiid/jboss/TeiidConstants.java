@@ -50,10 +50,16 @@ public class TeiidConstants {
     // VM wide elements
 	public static SimpleAttributeDefinition ASYNC_THREAD_POOL_ELEMENT = new SimpleAttributeDefinitionBuilder(Element.ASYNC_THREAD_POOL_ELEMENT.getModelName(), ModelType.STRING)
         .setXmlName(Element.ASYNC_THREAD_POOL_ELEMENT.getXMLName())
-        .setAllowNull(false)
+        .setAllowNull(true)
         .setAllowExpression(false)
         .build();
-	
+
+    public static SimpleAttributeDefinition THREAD_COUNT_ATTRIBUTE = new SimpleAttributeDefinitionBuilder(Element.THREAD_COUNT_ATTRIBUTE.getModelName(), ModelType.INT)
+        .setXmlName(Element.THREAD_COUNT_ATTRIBUTE.getXMLName())
+        .setAllowNull(true)
+        .setAllowExpression(false)
+        .build();
+    
     public static SimpleAttributeDefinition ALLOW_ENV_FUNCTION_ELEMENT = new SimpleAttributeDefinitionBuilder(Element.ALLOW_ENV_FUNCTION_ELEMENT.getModelName(), ModelType.BOOLEAN)
         .setXmlName(Element.ALLOW_ENV_FUNCTION_ELEMENT.getXMLName())
         .setAllowNull(true)
@@ -154,11 +160,23 @@ public class TeiidConstants {
         .setAllowExpression(false)
         .build();
     
+    public static SimpleAttributeDefinition DATA_ROLES_REQUIRED_ELEMENT = new SimpleAttributeDefinitionBuilder(Element.DATA_ROLES_REQUIRED_ELEMENT.getModelName(), ModelType.BOOLEAN)
+    	.setXmlName(Element.DATA_ROLES_REQUIRED_ELEMENT.getXMLName())
+    	.setAllowNull(true)
+    	.setAllowExpression(false)
+    	.build();
+    
     public static SimpleAttributeDefinition AUTHORIZATION_VALIDATOR_MODULE_ELEMENT = new SimpleAttributeDefinitionBuilder(Element.AUTHORIZATION_VALIDATOR_MODULE_ELEMENT.getModelName(), ModelType.STRING)
         .setXmlName(Element.AUTHORIZATION_VALIDATOR_MODULE_ELEMENT.getXMLName())
         .setAllowNull(true)
         .setAllowExpression(false)
         .build();
+    
+    public static SimpleAttributeDefinition PREPARSER_MODULE_ELEMENT = new SimpleAttributeDefinitionBuilder(Element.PREPARSER_MODULE_ELEMENT.getModelName(), ModelType.STRING)
+    	.setXmlName(Element.PREPARSER_MODULE_ELEMENT.getXMLName())
+    	.setAllowNull(true)
+    	.setAllowExpression(false)
+    	.build();
     
     // buffer manager
 	// BUFFER_SERVICE_ELEMENT("buffer-service",true, false, MeasurementUnit.NONE);
@@ -321,7 +339,7 @@ public class TeiidConstants {
 	//TRANSPORT_ELEMENT("transport",true, false, MeasurementUnit.NONE);
     public static SimpleAttributeDefinition TRANSPORT_PROTOCOL_ATTRIBUTE = new SimpleAttributeDefinitionBuilder(Element.TRANSPORT_PROTOCOL_ATTRIBUTE.getModelName(), ModelType.STRING)
         .setXmlName(Element.TRANSPORT_PROTOCOL_ATTRIBUTE.getXMLName())
-        .setAllowNull(false)
+        .setAllowNull(true)
         .setAllowExpression(false)
         .setDefaultValue(new ModelNode("teiid"))
         .build();   
@@ -503,7 +521,7 @@ public class TeiidConstants {
 	// Translator
 	// TRANSLATOR_ELEMENT("translator"),
     public static SimpleAttributeDefinition TRANSLATOR_NAME_ATTRIBUTE = new SimpleAttributeDefinitionBuilder(Element.TRANSLATOR_NAME_ATTRIBUTE.getModelName(), ModelType.STRING)
-        .setXmlName(Element.TRANSLATOR_MODULE_ATTRIBUTE.getXMLName())
+        .setXmlName(Element.TRANSLATOR_NAME_ATTRIBUTE.getXMLName())
         .setAllowExpression(false)
         .setAllowNull(false)
         .build();    
@@ -514,6 +532,11 @@ public class TeiidConstants {
         .setAllowNull(true)
         .build();    
     
+    public static SimpleAttributeDefinition TRANSLATOR_SLOT_ATTRIBUTE = new SimpleAttributeDefinitionBuilder(Element.TRANSLATOR_SLOT_ATTRIBUTE.getModelName(), ModelType.STRING)
+            .setXmlName(Element.TRANSLATOR_SLOT_ATTRIBUTE.getXMLName())
+            .setAllowExpression(false)
+            .setAllowNull(true)
+            .build();   
     	
     public static boolean isDefined(final SimpleAttributeDefinition attr, final ModelNode  model, final OperationContext context) throws OperationFailedException {
         ModelNode resolvedNode = attr.resolveModelAttribute(context, model);
@@ -538,5 +561,5 @@ public class TeiidConstants {
     public static Boolean asBoolean(final SimpleAttributeDefinition attr, ModelNode node, OperationContext context) throws OperationFailedException {
         ModelNode resolvedNode = attr.resolveModelAttribute(context, node);
         return resolvedNode.isDefined() ? resolvedNode.asBoolean() : null;
-    }        
+    }
 }

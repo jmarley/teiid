@@ -1299,12 +1299,6 @@ public class TestResolver {
 		// Resolve the query and check against expected objects
 		CompareCriteria actual = (CompareCriteria) helpResolveCriteria("pm3.g1.e2='2003-02-27'");	 //$NON-NLS-1$
 	
-		//if (! actual.getLeftExpression().equals(expected.getLeftExpression())) {
-		//	fail("left exprs not equal");
-		//} else if (!actual.getRightExpression().equals(expected.getRightExpression())) {
-		//	fail("right not equal");
-		//}
-		
 		assertEquals("Did not match expected criteria", expected, actual); //$NON-NLS-1$
     }
 		
@@ -1471,28 +1465,21 @@ public class TestResolver {
     // special test for both sides are String
     @Test public void testSetCriteriaCastFromExpression_9657() {
         // parse
-        Criteria expected = null;
         Criteria actual = null;
         try { 
             actual = QueryParser.getQueryParser().parseCriteria("bqt1.smalla.shortvalue IN (1, 2)"); //$NON-NLS-1$
-            expected = QueryParser.getQueryParser().parseCriteria("convert(bqt1.smalla.shortvalue, integer) IN (1, 2)"); //$NON-NLS-1$
-           
         } catch(TeiidException e) { 
             fail("Exception during parsing (" + e.getClass().getName() + "): " + e.getMessage());    //$NON-NLS-1$ //$NON-NLS-2$
         }   
    
         // resolve
         try { 
-            QueryResolver.resolveCriteria(expected, RealMetadataFactory.exampleBQTCached());
             QueryResolver.resolveCriteria(actual, RealMetadataFactory.exampleBQTCached());
         } catch(TeiidException e) { 
             fail("Exception during resolution (" + e.getClass().getName() + "): " + e.getMessage());     //$NON-NLS-1$ //$NON-NLS-2$
         } 
         
-        // Tweak expected to hide convert function - this is expected
-        ((Function) ((SetCriteria)expected).getExpression()).makeImplicit();
-        
-        assertEquals("Did not match expected criteria", expected, actual); //$NON-NLS-1$
+        assertEquals("Did not match expected criteria", ((SetCriteria)actual).getExpression().getType(), DataTypeManager.DefaultDataClasses.SHORT); //$NON-NLS-1$
     }    
     
     /** select e1 from pm1.g1 where e2 BETWEEN 1000 AND 2000 */
@@ -1881,14 +1868,6 @@ public class TestResolver {
         helpResolve("SELECT pm1.g1.e1 a FROM pm1.g1 group by pm1.g1.e1 ORDER BY pm1.g1.e1"); //$NON-NLS-1$
     }
     
-    @Test public void testUnaliasedOrderByFails() {
-        helpResolveException("SELECT pm1.g1.e1 e2 FROM pm1.g1 group by pm1.g1.e1 ORDER BY pm1.g1.e2"); //$NON-NLS-1$
-    }
-    
-    @Test public void testUnaliasedOrderByFails1() {
-        helpResolveException("SELECT pm1.g1.e1 e2 FROM pm1.g1 group by pm1.g1.e1 ORDER BY pm1.g1.e2 + 1"); //$NON-NLS-1$
-    }
-
     /** 
      * the group g1 is not known to the order by clause of a union
      */
@@ -2783,10 +2762,6 @@ public class TestResolver {
         helpResolveException("SELECT distinct pm1.g1.e1, e2 as x, e3 as y FROM pm1.g1 ORDER BY e4"); //$NON-NLS-1$
     }
 
-    @Test public void testOrderByUnrelated2() {
-        helpResolveException("SELECT max(e2) FROM pm1.g1 group by e1 ORDER BY e4"); //$NON-NLS-1$
-    }
-    
     @Test public void testOrderByExpression() {
     	Query query = (Query)helpResolve("select pm1.g1.e1 from pm1.g1 order by e2 || e3 "); //$NON-NLS-1$
     	assertEquals(-1, query.getOrderBy().getExpressionPosition(0));
@@ -2942,6 +2917,65 @@ public class TestResolver {
     @Test public void testForeignTempInvalidModel1() {
         String sql = "create foreign temporary table x (y string) on vm1"; //$NON-NLS-1$
         helpResolveException(sql, "TEIID31135 Could not create foreign temporary table, since schema vm1 is not physical."); //$NON-NLS-1$ 
+    }
+    
+    @Test public void testInvalidDateLiteral() {
+    	helpTestWidenToString("select * from bqt1.smalla where timestampvalue > 'a'");
+    }
+        
+    @Test public void testInvalidDateLiteral1() {
+    	helpTestWidenToString("select * from bqt1.smalla where timestampvalue between 'a' and 'b'");
+    }
+    
+    @Test public void testDateNullBetween() {
+    	helpResolve("select * from bqt1.smalla where null between timestampvalue and null", RealMetadataFactory.exampleBQTCached());
+    }
+    
+    @Test public void testNullComparison() {
+    	helpResolve("select * from bqt1.smalla where null > null", RealMetadataFactory.exampleBQTCached());
+    }
+    
+    @Test public void testNullIn() {
+    	helpResolve("select * from bqt1.smalla where null in (timestampvalue, null)", RealMetadataFactory.exampleBQTCached());
+    }
+    
+    @Test public void testNullIn1() {
+    	helpResolve("select * from bqt1.smalla where timestampvalue in (null, null)", RealMetadataFactory.exampleBQTCached());
+    }
+    
+    @Test public void testInvalidComparison() {
+    	helpTestWidenToString("select * from bqt1.smalla where timestampvalue > stringkey");
+    }
+    
+    @Test public void testInvalidComparison1() {
+    	helpTestWidenToString("select * from bqt1.smalla where stringkey > 1000");
+    }
+    
+    @Test public void testInvalidIn() {
+    	helpTestWidenToString("select * from bqt1.smalla where stringkey in (timestampvalue, 1)");
+    }
+    
+    @Test public void testInvalidIn1() {
+    	helpTestWidenToString("select * from bqt1.smalla where timestampvalue in (stringkey, 1)");
+    }
+    
+    @Test public void testInvalidIn2() {
+    	helpTestWidenToString("select * from bqt1.smalla where timestampvalue in (select stringkey from bqt1.smallb)");
+    }
+    
+    @Test public void testTimestampDateLiteral() {
+    	metadata = RealMetadataFactory.exampleBQTCached();
+    	Criteria crit = helpResolveCriteria("bqt1.smalla.timestampvalue = '2000-01-01'");
+    	assertTrue(((CompareCriteria)crit).getRightExpression().getType() == DataTypeManager.DefaultDataClasses.TIMESTAMP); 
+    	assertEquals("bqt1.smalla.timestampvalue = {ts'2000-01-01 00:00:00.0'}", crit.toString());
+    }
+    
+    private void helpTestWidenToString(String sql) {
+    	TransformationMetadata tm = RealMetadataFactory.exampleBQTCached().getDesignTimeMetadata();
+    	tm.setWidenComparisonToString(false);
+    	helpResolveException(sql, tm);
+    	tm.setWidenComparisonToString(true);
+    	helpResolve(sql, tm);
     }
 
 }

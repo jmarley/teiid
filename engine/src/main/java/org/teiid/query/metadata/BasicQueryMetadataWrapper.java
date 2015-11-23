@@ -74,7 +74,7 @@ public class BasicQueryMetadataWrapper implements QueryMetadataInterface {
 		return actualMetadata.getCharacterVDBResource(resourcePath);
 	}
 
-	public Object getDefaultValue(Object elementID)
+	public String getDefaultValue(Object elementID)
 			throws TeiidComponentException, QueryMetadataException {
 		return actualMetadata.getDefaultValue(elementID);
 	}
@@ -439,6 +439,11 @@ public class BasicQueryMetadataWrapper implements QueryMetadataInterface {
 	@Override
 	public boolean useOutputName() {
 		return actualMetadata.useOutputName();
+	}
+	
+	@Override
+	public boolean widenComparisonToString() {
+		return actualMetadata.widenComparisonToString();
 	}
 	
 }

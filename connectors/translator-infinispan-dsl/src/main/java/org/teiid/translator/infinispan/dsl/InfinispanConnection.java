@@ -21,13 +21,13 @@
  */
 package org.teiid.translator.infinispan.dsl;
 
-import java.util.List;
 import java.util.Map;
 
 import org.infinispan.query.dsl.QueryFactory;
 import org.teiid.translator.TranslatorException;
 
-import com.google.protobuf.Descriptors.Descriptor;
+import org.infinispan.protostream.descriptors.Descriptor;
+
 
 /**
  * Each InfinispanConnection implementation represents a connection to one or more
@@ -37,62 +37,71 @@ import com.google.protobuf.Descriptors.Descriptor;
  */
 public interface InfinispanConnection {
 	
-		
-	/**
-	 * Return the root class type stored in the specified cache
-	 * @param cacheName 
-	 * @return Class
-	 * @throws TranslatorException
-	 */
-	public Class<?> getType(String cacheName) throws TranslatorException;
-	
+			
 	/**
 	 * Returns the name of the primary key to the cache
 	 * @param cacheName
 	 * @return String key name
 	 * @throws TranslatorException 
 	 */
-	public String getPkField(String cacheName) throws TranslatorException;
-		
+	public String getPkField() throws TranslatorException;
+	
 	/**
-	 * Returns a map of all defined caches, and their respective root object class type,
-	 * that are accessible using this connection.
-	 * @return Map<String, Class>  --> CacheName, ClassType
+	 * Returns the class type of the key to the cache.
+	 * If the primary key class type is different from the 
+	 * cache key type, then the value will be converted
+	 * to the cache key class type before performing a get/put on the cache.
+	 * @return
+	 * @throws TranslatorException
+	 * @see {@link #getPkField()}
+	 */
+	public Class<?> getCacheKeyClassType() throws TranslatorException;
+	
+	
+	/**
+	 * Returns the name of the cache
+	 * @return String cacheName
 	 * @throws TranslatorException 
 	 */
-	public Map<String, Class<?>> getCacheNameClassTypeMapping() throws TranslatorException;
+	public String getCacheName() throws TranslatorException;
+	
+		
+	/**
+	 * Returns root object class type
+	 * that is defined for the cache.
+	 * @return Cache ClassType
+	 * @throws TranslatorException 
+	 */
+	public Class<?> getCacheClassType() throws TranslatorException;
 	
 
 	/**
-	 * Returns the protobuf descriptor that desribes the messages being serialized
-	 * @param cacheName
+	 * Returns the descriptor that desribes the messages being serialized
 	 * @return Descriptor
 	 * @throws TranslatorException
 	 */
-	public Descriptor getDescriptor(String cacheName) throws TranslatorException;
+	public Descriptor getDescriptor() throws TranslatorException;
 	
 	/**
 	 * Call to obtain the cache object
-	 * @param cacheName
 	 * @return Map cache
 	 * @throws TranslatorException 
 	 */
-	public Map<?, ?> getCache(String cacheName) throws TranslatorException;
+	public Map<Object, Object> getCache() throws TranslatorException;
 	
 	/**
 	 * Return the QueryFactory used by the cache.
-	 * @param cacheName
 	 * @return QueryFactory
 	 * @throws TranslatorException
 	 */
 	@SuppressWarnings("rawtypes")
-	public QueryFactory getQueryFactory(String cacheName) throws TranslatorException;
+	public QueryFactory getQueryFactory() throws TranslatorException;
 	
 	/**
-	 * Return a list of all the classes that have been registered for serialization.
-	 * @return List<Class>
+	 * Return the ClassRegistry that contains which classes and their methods.
+	 * @return ClassRegistry
 	 */
-	public List<Class> getRegisteredClasses();
+	public ClassRegistry getClassRegistry();
 	
 	
 }

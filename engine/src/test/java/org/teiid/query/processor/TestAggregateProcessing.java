@@ -34,6 +34,7 @@ import java.util.List;
 
 import org.junit.Test;
 import org.teiid.UserDefinedAggregate;
+import org.teiid.api.exception.query.FunctionExecutionException;
 import org.teiid.common.buffer.BufferManagerFactory;
 import org.teiid.common.buffer.impl.BufferManagerImpl;
 import org.teiid.core.types.ArrayImpl;
@@ -499,6 +500,24 @@ public class TestAggregateProcessing {
 				Arrays.asList(1, 1),
 				Arrays.asList(2, 0),
 				Arrays.asList(3, 1),
+		};
+
+		// Construct data manager with data
+		FakeDataManager dataManager = new FakeDataManager();
+		sampleData1(dataManager);
+
+		ProcessorPlan plan = helpGetPlan(sql, RealMetadataFactory.example1Cached());
+		helpProcess(plan, dataManager, expected);
+	}
+	
+	@Test public void testGroupSortMultipleAggregates() throws Exception {
+		String sql = "select e1, min(e2), max(e3) from pm1.g1 group by e1";
+
+		List[] expected = new List[] {
+				Arrays.asList(null, 1, false),
+				Arrays.asList("a", 0, true),
+				Arrays.asList("b", 2, false),
+				Arrays.asList("c", 1, true),
 		};
 
 		// Construct data manager with data
@@ -1088,4 +1107,90 @@ public class TestAggregateProcessing {
     	helpProcess(plan, dataManager, expected);
     }
 	
+    @Test public void testSidewaysCorrelationBelowAggregation() throws Exception {
+    	String sql = "select e1 from (SELECT sc.e1 FROM pm1.g1 sc, table(exec pm1.vsp21(sc.e2+1) ) as f ) as x group by e1";
+    	
+    	Command command = helpParse(sql); //$NON-NLS-1$
+    	
+    	CapabilitiesFinder capFinder = TestOptimizer.getGenericFinder();
+    	HardcodedDataManager dataManager = new HardcodedDataManager();
+    	
+    	dataManager.addData("SELECT g_0.e2, g_0.e1 FROM pm1.g1 AS g_0", //$NON-NLS-1$ 
+    			new List[] {
+    				Arrays.asList(1, "1"), //$NON-NLS-1$
+    				Arrays.asList(2, "2"), //$NON-NLS-1$
+    			});
+    	
+    	dataManager.addData("SELECT g_0.e1, g_0.e2 FROM pm1.g1 AS g_0", //$NON-NLS-1$ 
+    			new List[] {
+    				Arrays.asList("2", 2), //$NON-NLS-1$
+    			});
+    	
+    	ProcessorPlan plan = helpGetPlan(command, RealMetadataFactory.example1Cached(), capFinder);
+    	
+    	List[] expected = new List[] { 
+                Arrays.asList("1"),
+                Arrays.asList("2"),
+            };    
+    	
+    	helpProcess(plan, dataManager, expected);
+    }
+    
+	@Test public void testBigIntegerSum() throws Exception {
+		String sql = "SELECT sum(x) FROM agg x"; //$NON-NLS-1$
+
+		TransformationMetadata metadata = RealMetadataFactory.fromDDL("create foreign table agg (x biginteger)", "x", "y");
+		HardcodedDataManager hdm = new HardcodedDataManager();
+		hdm.addData("SELECT y.agg.x FROM y.agg", Arrays.asList(BigInteger.valueOf(1)));
+		ProcessorPlan plan = TestProcessor.helpGetPlan(sql, metadata);
+		TestProcessor.helpProcess(plan, hdm, new List[] {Arrays.asList(BigInteger.valueOf(1))});
+	}
+	
+	@Test public void testCorrelatedGroupingColumnExpression() throws Exception {
+		// Create query
+		String sql = "SELECT A.e2/2, A.e1 FROM pm1.g1 AS A GROUP BY A.e2/2, A.e1 HAVING A.e1 = (SELECT MAX(B.e1) FROM pm1.g1 AS B WHERE A.e2/2 = B.e2)"; //$NON-NLS-1$
+
+		// Create expected results
+		List[] expected = new List[] {
+				Arrays.asList(new Object[] { 0, "a" })};
+
+		// Construct data manager with data
+		FakeDataManager dataManager = new FakeDataManager();
+		FakeDataStore.sampleData1(dataManager, RealMetadataFactory.example1Cached());
+
+		// Plan query
+		ProcessorPlan plan = helpGetPlan(sql, RealMetadataFactory.example1Cached());
+
+		// Run query
+		helpProcess(plan, dataManager, expected);
+	}
+	
+	@Test public void testCorrelatedGroupingColumnExpressionPushdown() throws Exception {
+		// Create query
+		String sql = "SELECT A.e2/2, A.e1 FROM pm1.g1 AS A GROUP BY A.e2/2, A.e1 HAVING A.e1 = (SELECT MAX(B.e1) FROM pm1.g1 AS B WHERE A.e2/2 = B.e2)"; //$NON-NLS-1$
+
+		// Plan query
+		BasicSourceCapabilities bsc = TestAggregatePushdown.getAggregateCapabilities();
+		bsc.setFunctionSupport(SourceSystemFunctions.DIVIDE_OP, true);
+		bsc.setCapabilitySupport(Capability.QUERY_SUBQUERIES_CORRELATED, true);
+		bsc.setCapabilitySupport(Capability.QUERY_SUBQUERIES_SCALAR, true);
+		ProcessorPlan plan = TestOptimizer.helpPlan(sql, RealMetadataFactory.example1Cached(), 
+				new String[] {"SELECT v_0.c_0, v_0.c_1 FROM (SELECT (g_0.e2 / 2) AS c_0, g_0.e1 AS c_1 FROM pm1.g1 AS g_0) AS v_0 GROUP BY v_0.c_0, v_0.c_1 HAVING v_0.c_1 = (SELECT MAX(g_1.e1) FROM pm1.g1 AS g_1 WHERE g_1.e2 = v_0.c_0)"}, new DefaultCapabilitiesFinder(bsc), ComparisonMode.EXACT_COMMAND_STRING);
+		TestOptimizer.checkNodeTypes(plan, TestOptimizer.FULL_PUSHDOWN);
+
+		bsc.setCapabilitySupport(Capability.QUERY_FUNCTIONS_IN_GROUP_BY, true);
+		plan = TestOptimizer.helpPlan(sql, RealMetadataFactory.example1Cached(), 
+				new String[] {"SELECT (g_0.e2 / 2), g_0.e1 FROM pm1.g1 AS g_0 GROUP BY (g_0.e2 / 2), g_0.e1 HAVING g_0.e1 = (SELECT MAX(g_1.e1) FROM pm1.g1 AS g_1 WHERE g_1.e2 = (g_0.e2 / 2))"}, new DefaultCapabilitiesFinder(bsc), ComparisonMode.EXACT_COMMAND_STRING);
+		TestOptimizer.checkNodeTypes(plan, TestOptimizer.FULL_PUSHDOWN);
+	}
+	
+	@Test(expected=FunctionExecutionException.class) public void testSumOverflow() throws Exception {
+		String sql = "SELECT sum(x) FROM (select cast(9223372036854775807 as long) as x union all select 1) as x"; //$NON-NLS-1$
+
+		TransformationMetadata metadata = RealMetadataFactory.example1Cached();
+		HardcodedDataManager hdm = new HardcodedDataManager();
+		ProcessorPlan plan = TestProcessor.helpGetPlan(sql, metadata);
+		TestProcessor.helpProcess(plan, TestProcessor.createCommandContext(), hdm, null);
+	}
+
 }

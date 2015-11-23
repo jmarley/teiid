@@ -317,7 +317,7 @@ public class TestSortOptimization {
         bsc.setCapabilitySupport(Capability.ROW_LIMIT, true);
         CapabilitiesFinder finder = new DefaultCapabilitiesFinder(bsc);
         RelationalPlan plan = (RelationalPlan)helpPlan(sql, RealMetadataFactory.example1Cached(), null, finder, 
-                                      new String[] {"SELECT concat(g_0.e1, '1') AS c_0, g_0.e1 AS c_1, g_0.e2 AS c_2 FROM pm1.g1 AS g_0 ORDER BY c_0 LIMIT 2"}, TestOptimizer.SHOULD_SUCCEED); //$NON-NLS-1$
+                                      new String[] {"SELECT concat(g_0.e1, '1') AS c_0, g_0.e2 AS c_1 FROM pm1.g1 AS g_0 ORDER BY c_0 LIMIT 2"}, TestOptimizer.SHOULD_SUCCEED); //$NON-NLS-1$
         
         assertTrue(plan.getRootNode() instanceof ProjectNode);
     }
@@ -329,16 +329,16 @@ public class TestSortOptimization {
         bsc.setCapabilitySupport(Capability.ROW_LIMIT, true);
         CapabilitiesFinder finder = new DefaultCapabilitiesFinder(bsc);
         RelationalPlan plan = (RelationalPlan)helpPlan(sql, RealMetadataFactory.example1Cached(), null, finder, 
-                                      new String[] {"SELECT concat(g_0.e1, '1') AS c_0, g_0.e1 AS c_1, g_0.e2 AS c_2 FROM pm1.g1 AS g_0 ORDER BY c_0, c_2 LIMIT 2"}, TestOptimizer.SHOULD_SUCCEED); //$NON-NLS-1$
+                                      new String[] {"SELECT concat(g_0.e1, '1') AS c_0, g_0.e2 AS c_1 FROM pm1.g1 AS g_0 ORDER BY c_0, c_1 LIMIT 2"}, TestOptimizer.SHOULD_SUCCEED); //$NON-NLS-1$
         
         assertTrue(plan.getRootNode() instanceof ProjectNode);
         HardcodedDataManager hdm = new HardcodedDataManager();
-        hdm.addData("SELECT concat(g_0.e1, '1') AS c_0, g_0.e1 AS c_1, g_0.e2 AS c_2 FROM pm1.g1 AS g_0 ORDER BY c_0, c_2 LIMIT 2", Arrays.asList("c1", "c", 2), Arrays.asList("d1", "d", 3));
+        hdm.addData("SELECT concat(g_0.e1, '1') AS c_0, g_0.e2 AS c_1 FROM pm1.g1 AS g_0 ORDER BY c_0, c_1 LIMIT 2", Arrays.asList("c1", 2), Arrays.asList("d1", 3));
         TestProcessor.helpProcess(plan, hdm, new List<?>[] {Arrays.asList("c1", 1), Arrays.asList("d1", 1)});
     }
     
     //TODO this should trigger another view removal and thus the combination of the grouping/dup operation
-    @Test public void testGroupDupCombination1Pushdown() { 
+    @Test public void testGroupDupCombination1Pushdown() throws TeiidComponentException, TeiidProcessingException { 
         FakeCapabilitiesFinder capFinder = new FakeCapabilitiesFinder();
         BasicSourceCapabilities caps = getTypicalCapabilities();
         caps.setCapabilitySupport(Capability.QUERY_SELECT_DISTINCT, true);
@@ -351,7 +351,7 @@ public class TestSortOptimization {
         String sql = "select e1, (select e1 from pm2.g1 where e2 = x.e2) as z from (select distinct e1, e2 from pm1.g1) as x group by e1, e2 order by e1"; //$NON-NLS-1$
 
         ProcessorPlan plan = helpPlan(sql, RealMetadataFactory.example1Cached(), null, capFinder, 
-                                      new String[] {"SELECT v_0.c_0, v_0.c_1 FROM (SELECT DISTINCT g_0.e1 AS c_0, g_0.e2 AS c_1 FROM pm1.g1 AS g_0) AS v_0 GROUP BY v_0.c_0, v_0.c_1 ORDER BY c_0"}, TestOptimizer.SHOULD_SUCCEED); //$NON-NLS-1$ 
+                                      new String[] {"SELECT v_0.c_0, v_0.c_1 FROM (SELECT DISTINCT g_0.e1 AS c_0, g_0.e2 AS c_1 FROM pm1.g1 AS g_0) AS v_0 GROUP BY v_0.c_0, v_0.c_1 ORDER BY c_0"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$ 
         
         checkNodeTypes(plan, new int[] {
                 1,      // Access
@@ -484,6 +484,44 @@ public class TestSortOptimization {
         
         helpPlan(sql, metadata, null, new DefaultCapabilitiesFinder(caps), 
                 new String[] {"SELECT 'X' AS c_0, g_1.item_id AS c_1 FROM y.items AS g_1 GROUP BY g_1.item_id UNION ALL SELECT 'Y' AS c_0, g_0.item_id AS c_1 FROM y.items AS g_0 ORDER BY c_1 DESC LIMIT 50"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
+    }
+    
+    @Test public void testDistinctPushdownUnionWithConstant() throws Exception{
+        String sql = "select distinct e1, 1 from (select 'a' as e1 from pm1.g1 union all select 'b' from pm1.g2) as x";
+        
+        BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+        caps.setCapabilitySupport(Capability.QUERY_SELECT_DISTINCT, true);
+        caps.setCapabilitySupport(Capability.QUERY_SELECT_EXPRESSION, false);
+        caps.setCapabilitySupport(Capability.ROW_LIMIT, true);
+        
+        helpPlan(sql, RealMetadataFactory.example1Cached(), null, new DefaultCapabilitiesFinder(caps), 
+                new String[] {"SELECT g_0.e1 FROM pm1.g1 AS g_0 LIMIT 1", "SELECT g_0.e1 FROM pm1.g2 AS g_0 LIMIT 1"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
+        
+    }
+    
+    @Test public void testDistinctPushdown() throws Exception{
+        String sql = "select distinct e1, 1 from pm1.g1";
+        
+        BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+        caps.setCapabilitySupport(Capability.QUERY_SELECT_DISTINCT, true);
+        caps.setCapabilitySupport(Capability.QUERY_SELECT_EXPRESSION, false);
+        caps.setCapabilitySupport(Capability.ROW_LIMIT, true);
+        
+        helpPlan(sql, RealMetadataFactory.example1Cached(), null, new DefaultCapabilitiesFinder(caps), 
+                new String[] {"SELECT DISTINCT g_0.e1 FROM pm1.g1 AS g_0"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
+    }
+    
+    //same as above but with a different plan root
+    @Test public void testDistinctPushdown1() throws Exception{
+        String sql = "select distinct e1, 1 from pm1.g1 limit 1";
+        
+        BasicSourceCapabilities caps = TestOptimizer.getTypicalCapabilities();
+        caps.setCapabilitySupport(Capability.QUERY_SELECT_DISTINCT, true);
+        caps.setCapabilitySupport(Capability.QUERY_SELECT_EXPRESSION, false);
+        caps.setCapabilitySupport(Capability.ROW_LIMIT, true);
+        
+        helpPlan(sql, RealMetadataFactory.example1Cached(), null, new DefaultCapabilitiesFinder(caps), 
+                new String[] {"SELECT DISTINCT g_0.e1 FROM pm1.g1 AS g_0"}, ComparisonMode.EXACT_COMMAND_STRING); //$NON-NLS-1$
     }
 
 }

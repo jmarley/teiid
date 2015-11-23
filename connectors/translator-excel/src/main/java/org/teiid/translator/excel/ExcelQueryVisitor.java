@@ -155,10 +155,7 @@ public class ExcelQueryVisitor extends HierarchyVisitor {
 	public void visit(NamedTable obj) {
 		this.table = obj.getMetadataObject();
 		this.xlsPath = this.table.getProperty(ExcelMetadataProcessor.FILE, false);
-		this.sheetName = this.table.getNameInSource();
-		if (this.sheetName == null) {
-			this.sheetName = this.table.getName();
-		}
+		this.sheetName = this.table.getSourceName();
 		String firstRow = this.table.getProperty(ExcelMetadataProcessor.FIRST_DATA_ROW_NUMBER, false);
 		if (firstRow != null) {
 			// -1 make it zero based index
@@ -234,7 +231,10 @@ public class ExcelQueryVisitor extends HierarchyVisitor {
 	
 	@Override
 	public void visit(Limit obj) {
-		this.firstDataRowNumber = new Integer(obj.getRowOffset()-1);
+		int offset = obj.getRowOffset();
+		if (offset != 0) {
+			this.firstDataRowNumber = offset + this.firstDataRowNumber;
+		}
 		this.filters.add(new CompareFilter(this.firstDataRowNumber, Operator.GE));
 		this.filters.add(new CompareFilter(this.firstDataRowNumber+obj.getRowLimit(), Operator.LT));
 	}	

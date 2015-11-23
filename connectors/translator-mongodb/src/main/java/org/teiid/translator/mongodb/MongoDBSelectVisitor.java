@@ -21,22 +21,22 @@
  */
 package org.teiid.translator.mongodb;
 
+import static org.teiid.language.visitor.SQLStringVisitor.getRecordName;
+
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.regex.Pattern;
 
 import org.teiid.language.*;
+import org.teiid.language.Join.JoinType;
 import org.teiid.language.SortSpecification.Ordering;
 import org.teiid.language.visitor.HierarchyVisitor;
 import org.teiid.metadata.*;
 import org.teiid.translator.TranslatorException;
-import org.teiid.translator.mongodb.MutableDBRef.Association;
+import org.teiid.translator.mongodb.MergeDetails.Association;
 
-import com.mongodb.BasicDBList;
-import com.mongodb.BasicDBObject;
-import com.mongodb.DBObject;
-import com.mongodb.QueryBuilder;
+import com.mongodb.*;
 
 public class MongoDBSelectVisitor extends HierarchyVisitor {
     private AtomicInteger aliasCount = new AtomicInteger();
@@ -46,16 +46,13 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 	private Select command;
 	protected ArrayList<TranslatorException> exceptions = new ArrayList<TranslatorException>();
 
-	protected Stack<DBObject> onGoingPullCriteria = new Stack<DBObject>();
 	protected Stack<Object> onGoingExpression  = new Stack<Object>();
-	protected ConcurrentHashMap<Object, ColumnAlias> expressionMap = new ConcurrentHashMap<Object, ColumnAlias>();
+	protected ConcurrentHashMap<Object, ColumnDetail> expressionMap = new ConcurrentHashMap<Object, ColumnDetail>();
 	private HashMap<String, BasicDBObject> groupByProjections = new HashMap<String, BasicDBObject>();
-	protected ColumnAlias onGoingAlias;
 	protected MongoDocument mongoDoc;
 
 	// derived stuff
 	protected BasicDBObject project = new BasicDBObject();
-	protected BasicDBObject unwindProject;
 	protected Integer limit;
 	protected Integer skip;
 	protected DBObject sort;
@@ -65,7 +62,7 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 	protected ArrayList<String> selectColumns = new ArrayList<String>();
 	protected ArrayList<String> selectColumnReferences = new ArrayList<String>();
 	protected boolean projectBeforeMatch = false;
-	protected LinkedList<String> unwindTables = new LinkedList<String>();
+	protected MergePlanner mergePlanner = new MergePlanner();
 	protected ArrayList<Condition> pendingConditions = new ArrayList<Condition>();
 	protected LinkedList<MongoDocument> joinedDocuments = new LinkedList<MongoDocument>();
 	private boolean processingDerivedColumn = false;
@@ -113,14 +110,6 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
         }
     }
 
-	public static String getRecordName(AbstractMetadataRecord object) {
-		String nameInSource = object.getNameInSource();
-        if(nameInSource != null && nameInSource.length() > 0) {
-            return nameInSource;
-        }
-        return object.getName();
-    }
-
 	public String getColumnName(ColumnReference obj) {
 		String elemShortName = null;
 		AbstractMetadataRecord elementID = obj.getMetadataObject();
@@ -134,149 +123,139 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 
 	@Override
 	public void visit(DerivedColumn obj) {
-		this.onGoingAlias = buildAlias(obj.getAlias());
-		
-		Expression originalExpr = obj.getExpression();
-		
+		Expression teiidExpression = obj.getExpression();
+		String alias = getAlias(obj.getAlias());
+
 		this.processingDerivedColumn = true;
-		append(originalExpr);
-		this.processingDerivedColumn = false;
+		append(teiidExpression);
 
-		Object expr = this.onGoingExpression.pop();
+		Object mongoExpression = this.onGoingExpression.pop();
 
-		ColumnAlias previousAlias = this.expressionMap.put(expr, this.onGoingAlias);
-		if (previousAlias == null) {
-			previousAlias = this.onGoingAlias;
+		ColumnDetail exprDetails = this.expressionMap.get(mongoExpression);
+		if (exprDetails == null) {
+			exprDetails = new ColumnDetail();
+			exprDetails.addProjectedName(alias);
+			this.expressionMap.put(mongoExpression, exprDetails);
 		}
 
-		if (originalExpr instanceof ColumnReference) {
-			String elementName = getColumnName((ColumnReference)obj.getExpression());
-			this.selectColumnReferences.add(elementName);
-			// the the expression is already part of group by then the projection should be $_id.{name}
+		// the the expression is already part of group by then the projection should be $_id.{name}
+		this.selectColumns.add(alias);
+		if (exprDetails.partOfGroupBy) {
 			BasicDBObject id = this.groupByProjections.get("_id"); //$NON-NLS-1$
-			if (id == null) {
-				if (this.command.isDistinct() || this.groupByProjections.get(previousAlias.projectedName) != null) {
+			this.project.append(alias, id.get(exprDetails.getProjectedName()));
+			exprDetails.addProjectedName(alias);
+	        this.selectColumnReferences.add(alias);
+		}
+		else {
+		    exprDetails.addProjectedName(alias);
+			exprDetails.partOfProject = true;
+			if (teiidExpression instanceof ColumnReference) {
+				String elementName = getColumnName((ColumnReference)obj.getExpression());
+				this.selectColumnReferences.add(elementName);
+				// the the expression is already part of group by then the projection should be $_id.{name}
+				if (this.command.isDistinct() || this.groupByProjections.get(alias) != null) {
 					// this is DISTINCT case
-					this.project.append(this.onGoingAlias.projectedName, "$_id."+previousAlias.projectedName); //$NON-NLS-1$
-					this.selectColumns.add(this.onGoingAlias.projectedName);
+					this.project.append(alias, "$_id."+alias); //$NON-NLS-1$
 					// if group by does not exist then build the group root id based on distinct
-					this.group.put(this.onGoingAlias.projectedName, expr);
+					this.group.put(alias, mongoExpression);
 				}
 				else {
-					this.project.append(this.onGoingAlias.projectedName, expr);
-					this.selectColumns.add(this.onGoingAlias.projectedName);					
+					this.project.append(alias, mongoExpression);
 				}
 			}
 			else {
-				this.project.append(this.onGoingAlias.projectedName, id.get(previousAlias.projectedName)); 
-				this.selectColumns.add(this.onGoingAlias.projectedName);					
-			}			
+			    implicitProject(teiidExpression, mongoExpression, exprDetails, alias);
+				// what user sees as project
+				this.selectColumnReferences.add(alias);
+			}
 		}
-		else {
-		    implicitProject(originalExpr, expr);
-			// what user sees as project
-			this.selectColumns.add(previousAlias.projectedName);
-			this.selectColumnReferences.add(previousAlias.projectedName);
-		}
-		this.onGoingAlias = null;
+		this.processingDerivedColumn = false;
 	}
 
-	private ColumnAlias buildAlias(String alias) {
+	private String getAlias(String alias) {
 		if (alias == null) {
-			String str = "_m"+this.aliasCount.getAndIncrement(); //$NON-NLS-1$
-			return new ColumnAlias(str, str, str, str, null);
+			return "_m"+this.aliasCount.getAndIncrement(); //$NON-NLS-1$
 		}
-		return new ColumnAlias(alias, alias,alias,  alias, null);
+		return alias;
+	}
+
+	private ColumnDetail buildAlias() {
+	    return buildAlias("_m"+this.aliasCount.getAndIncrement()); //$NON-NLS-1$
+	}
+
+	private ColumnDetail buildAlias(String alias) {
+	    if (alias == null) {
+	        return buildAlias();
+	    }
+	    ColumnDetail detail =  new ColumnDetail();
+		detail.addProjectedName(alias);
+		return detail;
 	}
 
 	@Override
 	public void visit(ColumnReference obj) {
 		try {
-			String elementName = getColumnName(obj);
-
 			if (obj.getMetadataObject() == null) {
 				for (Object expr:this.expressionMap.keySet()) {
-					ColumnAlias alias = this.expressionMap.get(expr);
-					if (alias.projectedName.equals(elementName)) {
+					ColumnDetail columnInfo = this.expressionMap.get(expr);
+					if (columnInfo.hasProjectedName(getColumnName(obj))) {
 						this.onGoingExpression.push(expr);
 						break;
 					}
 				}
 			}
 			else {
-				String selectionName = elementName;
-				String columnName = obj.getMetadataObject().getName();
-				String pullColumnName = obj.getMetadataObject().getName();
+			    // do not allow array type in where clauses etc.
+				/*
+			    if (!this.processingDerivedColumn) {
+			        if (DataTypeManager.isArrayType(obj.getMetadataObject().getRuntimeType())){
+			            this.exceptions.add(new TranslatorException(MongoDBPlugin.Event.TEIID18027, MongoDBPlugin.Util.gs(MongoDBPlugin.Event.TEIID18027, getColumnName(obj))));
+			        }
+			    }
+			    */
 
-				MongoDocument columnDocument = getDocument(obj.getTable().getMetadataObject());
-				MongoDocument targetDocument = this.mongoDoc.getTargetDocument();
-				String tableName = null;
-
-				// column is on the same collection
-				if (columnDocument.equals(targetDocument)) {
-					// check if this is primary key
-					if (columnDocument.isPartOfPrimaryKey(columnName)) {
-						if (columnDocument.hasCompositePrimaryKey()) {
-							elementName = "_id."+columnName; //$NON-NLS-1$
-							selectionName = elementName;
-							pullColumnName = "_id."+columnName; //$NON-NLS-1$
-						}
-						else {
-							elementName = "_id"; //$NON-NLS-1$
-							selectionName = elementName;
-							pullColumnName = "_id"; //$NON-NLS-1$
-						}
-					}
-					if (columnDocument.isPartOfForeignKey(columnName)) {
-						// if this column is foreign key on same table then access must be "key.$id" because it is DBRef
-						selectionName = elementName + ".$id"; //$NON-NLS-1$
-						if (columnDocument.isMultiKeyForeignKey(columnName)) {
-							selectionName = selectionName+"."+columnName; //$NON-NLS-1$
-						}
-						pullColumnName = columnName+".$id"; //$NON-NLS-1$
-					}
-				}
-				else if (targetDocument.embeds(columnDocument)){
-					// if this is embddable/embedIn table, then we need to use the embedded collection name
-					MutableDBRef ref = targetDocument.getEmbeddedDocumentReferenceKey(columnDocument);
-					elementName = ref.getAlias()+"."+columnName; //$NON-NLS-1$
-					tableName = columnDocument.getTable().getName();
-					selectionName = elementName;
-					
-					if (columnDocument.isPartOfPrimaryKey(columnName)) {
-						if (columnDocument.hasCompositePrimaryKey()) {
-							elementName = ref.getAlias()+"."+"_id."+columnName; //$NON-NLS-1$ //$NON-NLS-2$
-							selectionName = elementName;
-							pullColumnName = "_id."+columnName; //$NON-NLS-1$
-						}
-						else {
-							elementName = ref.getAlias()+"."+"_id"; //$NON-NLS-1$ //$NON-NLS-2$
-							selectionName = elementName;
-							pullColumnName = "_id"; //$NON-NLS-1$
-						}
-					}
-					if (columnDocument.isPartOfForeignKey(columnName)) {
-						// if this column is foreign key on same table then access must be "key.$id" because it is DBRef
-						selectionName = elementName + ".$id"; //$NON-NLS-1$
-						if (columnDocument.isMultiKeyForeignKey(columnName)) {
-							selectionName = selectionName+"."+columnName; //$NON-NLS-1$
-						}
-						pullColumnName = columnName+".$id"; //$NON-NLS-1$
-					}
-				}
-
-				String mongoExpr = "$"+elementName; //$NON-NLS-1$
+			    ColumnDetail columnInfo = buildColumnDetail(obj);
+				Object mongoExpr = columnInfo.expression;
 				this.onGoingExpression.push(mongoExpr);
-
-				if (this.onGoingAlias == null) {
-					this.expressionMap.putIfAbsent(mongoExpr, new ColumnAlias("_c"+this.columnCount.getAndIncrement(), selectionName, columnName, pullColumnName, tableName)); //$NON-NLS-1$
-				}
+				this.expressionMap.putIfAbsent(mongoExpr, columnInfo);
 			}
 		} catch (TranslatorException e) {
 			this.exceptions.add(e);
 			return;
 		}
+	}
 
+	ColumnDetail buildColumnDetail(ColumnReference obj) throws TranslatorException {
+        MongoDocument columnDocument = getDocument(obj.getTable().getMetadataObject());
+        MongoDocument targetDocument = this.mongoDoc.getTargetDocument();
+
+        String columnName = obj.getMetadataObject().getName();
+        String documentFieldName = obj.getMetadataObject().getName();
+
+        // column is on the same collection
+        if (columnDocument.equals(targetDocument)) {
+            documentFieldName = columnDocument.getColumnName(columnName);
+        }
+        else if (targetDocument.embeds(columnDocument)){
+            // if this is embeddable table, then we need to use the embedded collection name
+            MergeDetails ref = targetDocument.getEmbeddedDocumentReferenceKey(columnDocument);
+            String parentColumnName = ref.getParentColumnName(columnName);
+            if (parentColumnName != null) {
+                documentFieldName = targetDocument.getColumnName(parentColumnName);
+            }
+            else {
+                documentFieldName = columnDocument.getDocumentName() + "." + columnDocument.getColumnName(columnName); //$NON-NLS-1$
+            }
+        }
+        else if (targetDocument.merges(columnDocument)){
+            documentFieldName = columnDocument.getColumnName(columnName);
+        }
+
+        ColumnDetail detail = new ColumnDetail();
+        detail.addProjectedName(documentFieldName);
+        detail.documentFieldName = documentFieldName;
+        detail.expression = "$"+documentFieldName; //$NON-NLS-1$
+        return detail;
 	}
 
     private MongoDocument getDocument(Table table) {
@@ -300,8 +279,20 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
     	BasicDBObject expr = null;
 		if (obj.getName().equals(AggregateFunction.COUNT)) {
 	        // this is only true for count(*) case, so we need implicit group id clause
-		    this.group.put("_id", null); //$NON-NLS-1$
-			expr = new BasicDBObject("$sum", new Integer(1)); //$NON-NLS-1$
+	        try {
+                Object param = this.onGoingExpression.pop();
+                BasicDBList eq = new BasicDBList();
+                eq.add(0, param);
+                eq.add(1, null);
+                BasicDBList values = new BasicDBList();
+                values.add(0, new BasicDBObject("$eq", eq)); //$NON-NLS-1$
+                values.add(1, 0);
+                values.add(2, 1);
+                expr = new BasicDBObject("$sum",new BasicDBObject("$cond", values)); //$NON-NLS-1$ //$NON-NLS-2$
+            } catch (EmptyStackException e) {
+                this.group.put("_id", null); //$NON-NLS-1$
+                expr = new BasicDBObject("$sum", new Integer(1)); //$NON-NLS-1$
+            }
 		}
 		else if (obj.getName().equals(AggregateFunction.AVG)) {
 			expr = new BasicDBObject("$avg", this.onGoingExpression.pop()); //$NON-NLS-1$
@@ -324,52 +315,129 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 		}
     }
 
-	private ColumnAlias addToProject(Object expr, boolean addExprAsProject) {
-		ColumnAlias previousAlias = this.expressionMap.get(expr);
-		if (previousAlias == null) {
-			// if expression is in having clause there is will be no alias; however mongo expects this
-			// to be elevated to grouping clause
-			previousAlias = this.onGoingAlias;
-			if (this.onGoingAlias == null) {
+	private ColumnDetail addToProject(Object expr, boolean addExprAsProject, ColumnDetail detail, boolean needsProjection, String projectedName) {
+		if (detail == null) {
+			// if expression is in having/where clause there is will be no alias; however mongo expects some functions
+			// to be elevated to project before $match can be run
+			if (needsProjection) {
 				this.projectBeforeMatch = true;
-				previousAlias = buildAlias(null);
 			}
-			this.expressionMap.putIfAbsent(expr, previousAlias);
+			detail = buildAlias();
+			this.expressionMap.putIfAbsent(expr, detail);
+			projectedName = detail.getProjectedName();
 		}
+		detail.expression = expr;
 
-		if (this.project.get(previousAlias.projectedName) == null && !this.project.values().contains(expr)) {
-			this.project.append(previousAlias.projectedName, addExprAsProject?expr:1);
+		if (needsProjection) {
+			if (this.project.get(projectedName) == null && !this.project.values().contains(expr)) {
+				this.project.append(projectedName, addExprAsProject?expr:1);
+			}
+			detail.partOfProject = true;
 		}
-		return previousAlias;
+		else {
+			detail.partOfProject = false;
+		}
+		return detail;
 	}
 
 	@Override
 	public void visit(Function obj) {
-    	if (this.executionFactory.getFunctionModifiers().containsKey(obj.getName())) {
-            this.executionFactory.getFunctionModifiers().get(obj.getName()).translate(obj);
+		String functionName = obj.getName();
+		if (functionName.indexOf('.') != -1) {
+			functionName = functionName.substring(functionName.indexOf('.')+1);
+		}
+    	if (this.executionFactory.getFunctionModifiers().containsKey(functionName)) {
+            List<?> parts =  this.executionFactory.getFunctionModifiers().get(functionName).translate(obj);
+            if (parts != null) {
+            	obj = (Function)parts.get(0);
+            }
     	}
     	BasicDBObject expr = null;
-    	List<Expression> args = obj.getParameters();
-		if (args != null) {
-			BasicDBList params = new BasicDBList();
-			for (int i = 0; i < args.size(); i++) {
-				append(args.get(i));
-				Object param = this.onGoingExpression.pop();
-				params.add(param);
+    	if (isGeoSpatialFunction(functionName)) {
+			expr = (BasicDBObject)handleGeoSpatialFunction(functionName, obj);
+    	} 
+    	else if (isStringFunction(functionName)) {
+    	    expr = (BasicDBObject)handleStringFunction(functionName, obj);
+    	}
+    	else {
+	    	List<Expression> args = obj.getParameters();
+			if (args != null) {
+				BasicDBList params = new BasicDBList();
+				for (int i = 0; i < args.size(); i++) {
+					append(args.get(i));
+					Object param = this.onGoingExpression.pop();
+					params.add(param);
+				}
+				expr = new BasicDBObject(obj.getName(), params);
 			}
-			expr = new BasicDBObject(obj.getName(), params);
-		}
+    	}
 
-		if(expr != null) {			
+		if(expr != null) {
 			this.onGoingExpression.push(expr);
 		}
+	}
+
+    private boolean isStringFunction(String functionName) {
+        if (functionName.equalsIgnoreCase("UCASE")
+                || functionName.equalsIgnoreCase("LCASE")
+                || functionName.equalsIgnoreCase("SUBSTRING")) {
+	        return true;
+	    }
+        return false;
+    }
+    
+    private BasicDBObject handleStringFunction(String functionName, Function function) {
+        List<Expression> args = function.getParameters();
+        BasicDBObject func = null;
+
+        append(args.get(0));
+        Object column = this.onGoingExpression.pop();
+        if (args.size() == 1) {
+            func = new BasicDBObject(function.getName(), column);
+        } 
+        else {
+            BasicDBList params = new BasicDBList();
+            params.add(column);
+            for (int i = 1; i < args.size(); i++) {
+                append(args.get(i));
+                Object param = this.onGoingExpression.pop();
+                params.add(param);
+            }
+            func = new BasicDBObject(function.getName(), params); 
+        }
+        BasicDBObject ne = buildNE(column.toString(), null);
+        return buildCondition(ne, func, null);
+    }    
+    
+    private BasicDBObject buildCondition(Object expr, Object trueExpr, Object falseExpr) {
+        BasicDBList values = new BasicDBList();
+        values.add(0, expr);
+        values.add(1, trueExpr);
+        values.add(2, falseExpr);
+        return new BasicDBObject("$cond", values);        
+    }
+
+    private BasicDBObject buildNE(Object leftExpr, Object rightExpr) {
+        BasicDBList values = new BasicDBList();
+        values.add(0, leftExpr);
+        values.add(1, rightExpr);        
+        return new BasicDBObject("$ne", values);        
+    }
+    
+    private boolean isGeoSpatialFunction(String name) {
+		for (String func:MongoDBExecutionFactory.GEOSPATIAL_FUNCTIONS) {
+			if (name.equalsIgnoreCase(func)) {
+				return true;
+			}
+		}
+		return false;
 	}
 
 	@Override
 	public void visit(NamedTable obj) {
 		try {
 			this.mongoDoc = new MongoDocument(obj.getMetadataObject(), this.metadata);
-			configureUnwind(this.mongoDoc, null);
+			configureUnwind(this.mongoDoc);
 		} catch (TranslatorException e) {
 			this.exceptions.add(e);
 		}
@@ -382,90 +450,70 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 			if (obj.getLeftItem() instanceof Join) {
 				append(obj.getLeftItem());
 				Table right = ((NamedTable)obj.getRightItem()).getMetadataObject();
-				processJoin(this.mongoDoc, new MongoDocument(right, this.metadata), obj.getCondition(), (Join)obj.getLeftItem());
+				processJoin(this.mongoDoc, new MongoDocument(right, this.metadata), obj.getCondition(), obj.getJoinType());
 			}
 			else if (obj.getRightItem() instanceof Join) {
 				Table left = ((NamedTable)obj.getLeftItem()).getMetadataObject();
 				append(obj.getRightItem());
-				processJoin(this.mongoDoc, new MongoDocument(left, this.metadata), obj.getCondition(), (Join)obj.getRightItem());
+				processJoin(this.mongoDoc, new MongoDocument(left, this.metadata), obj.getCondition(), obj.getJoinType());
 			}
 			else {
 				Table left = ((NamedTable)obj.getLeftItem()).getMetadataObject();
 				Table right = ((NamedTable)obj.getRightItem()).getMetadataObject();
-				processJoin(new MongoDocument(left, this.metadata), new MongoDocument(right, this.metadata), obj.getCondition(), obj);
+				processJoin(new MongoDocument(left, this.metadata), new MongoDocument(right, this.metadata), obj.getCondition(), obj.getJoinType());
 			}
 		} catch (TranslatorException e) {
 			this.exceptions.add(e);
 		}
 	}
 
-	//TODO: test nested merge? does it still work?
-	private void configureUnwind(MongoDocument mergeDocument, String child) throws TranslatorException {
-		if (mergeDocument.isMerged()) {
-			MongoDocument parentDocument = mergeDocument.getMergeDocument();
-			if (parentDocument.isMerged()) {
-				configureUnwind(parentDocument, mergeDocument.getMergeKey().getAlias());
+	private void configureUnwind(MongoDocument document) throws TranslatorException {
+		if (document.isMerged()) {
+
+		    // if nested document
+            MongoDocument mergeDocument = document.getMergeDocument();
+            if (mergeDocument.isMerged()) {
+                configureUnwind(mergeDocument);
+            }
+
+			if (document.getMergeAssociation() == Association.MANY) {
+			    this.mergePlanner.addNode(new UnwindNode(document));
 			}
 			else {
-				if (mergeDocument.getMergeAssociation() == Association.MANY) {
-					if (child == null) {
-						this.unwindTables.addFirst(mergeDocument.getMergeKey().getAlias());
-					}
-					else {
-						this.unwindTables.addFirst(mergeDocument.getMergeKey().getAlias()+"."+child); //$NON-NLS-1$
-						this.unwindTables.addFirst(mergeDocument.getMergeKey().getAlias());
-					}
-				}
-			}
+			    this.mergePlanner.addNode(new ExistsNode(document));
+            }
 		}
 	}
 
-	private void processJoin(MongoDocument left, MongoDocument right, Condition cond, Join join) throws TranslatorException {
+	private void processJoin(MongoDocument left, MongoDocument right, Condition cond, JoinType joinType) throws TranslatorException {
 		// now adjust for the left/right outer depending upon who is the outer document
-		JoinCriteriaVisitor jcv = new JoinCriteriaVisitor(join, left, right);
-		DBObject match =  jcv.getCondition();
-		BasicDBObject projection =  jcv.getProjection();
-		
-    	if (match != null && this.match != null) {    		    	
-    		this.match = QueryBuilder.start().and(this.match, match).get();
-    	}
-    	else {
-    		this.match = match;
-    	}
-    	
-    	if (projection != null) {
-    		if (this.unwindProject == null) {
-    			this.unwindProject = projection;
-    		}
-    		else {
-    			this.unwindProject.append(jcv.getAliasName(), projection.get(jcv.getAliasName()));
-    		}
-    	}
-		
-		if (left.embeds(right)) {
+		JoinCriteriaVisitor jcv = new JoinCriteriaVisitor(joinType, left, right, this.mergePlanner);
+		jcv.process(cond);
+
+		if (left.contains(right)) {
 			this.mongoDoc = left;
 			this.joinedDocuments.add(right);
-			configureUnwind(right, null);
+			configureUnwind(right);
 		}
-		else if (right.embeds(left)) {
+		else if (right.contains(left)) {
 			this.mongoDoc = right;
 			this.joinedDocuments.add(left);
-			configureUnwind(left, null);
+			configureUnwind(left);
 		}
 		else {
 			if (this.mongoDoc != null) {
 				// this is for nested grand kids
 				for (MongoDocument child:this.joinedDocuments) {
-					if (child.embeds(right)) {
+					if (child.contains(right)) {
 						this.joinedDocuments.add(right);
-						configureUnwind(right, null);
+						configureUnwind(right);
 						return;
 					}
 				}
 			}
 			throw new TranslatorException(MongoDBPlugin.Util.gs(MongoDBPlugin.Event.TEIID18012, left.getTable().getName(), right.getTable().getName()));
 		}
-		
+
         if (cond != null) {
         	this.pendingConditions.add(cond);
         }
@@ -473,13 +521,7 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 
 	@Override
     public void visit(Select obj) {
-	    
-	    try {
-            SQLRewriterVisitor.rewrite(obj);
-        } catch (TranslatorException e) {
-            this.exceptions.add(e);
-        }
-	    
+
     	this.command = obj;
 
         if (obj.getFrom() != null && !obj.getFrom().isEmpty()) {
@@ -513,9 +555,6 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
         else {
         	// default match in case no where clause used
         	// TEIID-2841 - in ONE-2-ONE case $unwind works as filter
-        	if (this.mongoDoc.isMerged() && this.mongoDoc.getMergeAssociation().equals(Association.ONE)) {
-        		this.match = QueryBuilder.start(mongoDoc.getTable().getName()).exists("true").get(); //$NON-NLS-1$
-        	}
         }
 
         if (obj.getGroupBy() != null) {
@@ -525,7 +564,7 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
     	append(obj.getDerivedColumns());
 
     	// in distinct since there may not be group by, but mongo requires a grouping clause.
-		if (obj.getGroupBy() == null && obj.isDistinct() && !this.group.containsField("_id")) { //$NON-NLS-1$ 
+		if (obj.getGroupBy() == null && obj.isDistinct() && !this.group.containsField("_id")) { //$NON-NLS-1$
 			BasicDBObject id = new BasicDBObject(this.group);
 			this.group.clear();
 			this.group.put("_id", id); //$NON-NLS-1$
@@ -556,25 +595,21 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
         	 append(obj.getLimit());
         }
     }
-	
-	private ColumnAlias implicitProject(Expression teiidExpr, Object mongoExpr) {
+
+	private ColumnDetail implicitProject(Expression teiidExpr, Object mongoExpr, ColumnDetail columnDetails, String projectedName) {
         if (teiidExpr instanceof ColumnReference) {
-            ColumnAlias alias = this.expressionMap.get(mongoExpr);
-            if (alias == null) {
-                alias = buildAlias(null);
-                this.expressionMap.put(mongoExpr, alias);
-            }
-            return alias;
+            return this.expressionMap.get(mongoExpr);
         }
         else if (teiidExpr instanceof AggregateFunction) {
-            ColumnAlias alias = addToProject(mongoExpr, false);
+            ColumnDetail alias = addToProject(mongoExpr, false, columnDetails, true, projectedName);
             if (!this.group.values().contains(mongoExpr)) {
-                this.group.put(alias.projectedName, mongoExpr);
+                this.group.put(projectedName, mongoExpr);
             }
             return alias;
         }
         else if (teiidExpr instanceof Function) {
-            return addToProject(mongoExpr, true);
+        	Boolean avoidProjection = Boolean.valueOf(((Function) teiidExpr).getMetadataObject().getProperty(MongoDBExecutionFactory.AVOID_PROJECTION, false));
+            return addToProject(mongoExpr, true, columnDetails, processingDerivedColumn||!avoidProjection, projectedName);
         }
         else if (teiidExpr instanceof Condition) {
             // needs to be in the form "_mo: {$cond: [{$eq :["$city", "FREEDOM"]}, true, false]}}}"
@@ -582,11 +617,11 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
             values.add(0, mongoExpr);
             values.add(1, true);
             values.add(2, false);
-            return addToProject(new BasicDBObject("$cond", values), true); //$NON-NLS-1$
+            return addToProject(new BasicDBObject("$cond", values), true, columnDetails, true, projectedName); //$NON-NLS-1$
         }
         else if (teiidExpr instanceof Literal) {
             if (this.executionFactory.getVersion().compareTo(MongoDBExecutionFactory.TWO_6) >= 0) {
-                return addToProject(new BasicDBObject("$literal", mongoExpr), true); //$NON-NLS-1$
+                return addToProject(new BasicDBObject("$literal", mongoExpr), true, columnDetails, true, projectedName); //$NON-NLS-1$
             }
             this.exceptions.add(new TranslatorException(MongoDBPlugin.Event.TEIID18026, MongoDBPlugin.Util.gs(MongoDBPlugin.Event.TEIID18026)));
         }
@@ -595,69 +630,83 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 
 	@Override
 	public void visit(Comparison obj) {
-        
+
 		// this for $cond in the select statement, and formatting of command for $cond vs $match is different
         if (this.processingDerivedColumn) {
         	visitDerivedExpression(obj);
         	return;
         }
-        
+
         // this for the normal where clause
-		ColumnAlias exprAlias = getExpressionAlias(obj.getLeftExpression());
-
+		ColumnDetail leftExprDetails = getExpressionAlias(obj.getLeftExpression());
         append(obj.getRightExpression());
-
         Object rightExpr = this.onGoingExpression.pop();
         if (this.expressionMap.get(rightExpr) != null) {
-        	rightExpr = this.expressionMap.get(rightExpr).projectedName;
-        }
-    	
-		QueryBuilder query = QueryBuilder.start(exprAlias.selectionName);
-		QueryBuilder pullQuery = QueryBuilder.start(exprAlias.pullColumnName);
-    	
-    	switch(obj.getOperator()) {
-        case EQ:
-        	query.is(rightExpr);
-        	pullQuery.is(rightExpr);
-        	break;
-        case NE:
-        	query.notEquals(rightExpr);
-        	pullQuery.notEquals(rightExpr);
-        	break;
-        case LT:
-        	query.lessThan(rightExpr);
-        	pullQuery.lessThan(rightExpr);
-        	break;
-        case LE:
-        	query.lessThanEquals(rightExpr);
-        	pullQuery.lessThanEquals(rightExpr);
-        	break;
-        case GT:
-        	query.greaterThan(rightExpr);
-        	pullQuery.greaterThan(rightExpr);
-        	break;
-        case GE:
-        	query.greaterThanEquals(rightExpr);
-        	pullQuery.greaterThanEquals(rightExpr);
-        	break;
-        }
-    	this.onGoingExpression.push(query.get());
-    	
-        if (obj.getLeftExpression() instanceof ColumnReference) {
-        	ColumnReference colum = (ColumnReference)obj.getLeftExpression();
-			this.mongoDoc.updateReferenceColumnValue(colum.getTable().getName(), exprAlias.columnName, rightExpr);
+        	rightExpr = this.expressionMap.get(rightExpr).getProjectedName();
         }
 
-        // build pull criteria for delete
-       	this.onGoingPullCriteria.push(pullQuery.get());
+        QueryBuilder query = leftExprDetails.getQueryBuilder();
+        buildComparisionQuery(obj, rightExpr, query);
+
+		if (leftExprDetails.partOfProject || obj.getLeftExpression() instanceof ColumnReference) {
+	    	this.onGoingExpression.push(query.get());
+		}
+		else {
+			this.onGoingExpression.push(buildFunctionQuery(obj, (BasicDBObject)leftExprDetails.expression, rightExpr));
+		}
+
+    	if (obj.getLeftExpression() instanceof ColumnReference) {
+            ColumnReference column = (ColumnReference)obj.getLeftExpression();
+            this.mongoDoc.updateReferenceColumnValue(column.getTable().getName(), column.getName(), rightExpr);
+        }
 	}
+
+	protected BasicDBObject buildFunctionQuery(Comparison obj, BasicDBObject leftExpr, Object rightExpr) {
+        switch(obj.getOperator()) {
+        case EQ:
+        	if (rightExpr instanceof Boolean && ((Boolean)rightExpr)) {
+        		return leftExpr;
+        	}
+			//$FALL-THROUGH$
+		case NE:
+        case LT:
+        case LE:
+        case GT:
+        case GE:
+        }
+        this.exceptions.add(new TranslatorException(MongoDBPlugin.Event.TEIID18030, MongoDBPlugin.Util.gs(MongoDBPlugin.Event.TEIID18030)));
+        return null;
+    }
+
+	protected void buildComparisionQuery(Comparison obj, Object rightExpr, QueryBuilder query) {
+        switch(obj.getOperator()) {
+        case EQ:
+            query.is(rightExpr);
+            break;
+        case NE:
+            query.notEquals(rightExpr);
+            break;
+        case LT:
+            query.lessThan(rightExpr);
+            break;
+        case LE:
+            query.lessThanEquals(rightExpr);
+            break;
+        case GT:
+            query.greaterThan(rightExpr);
+            break;
+        case GE:
+            query.greaterThanEquals(rightExpr);
+            break;
+        }
+    }
 
 	private void visitDerivedExpression(Comparison obj) {
 		append(obj.getLeftExpression());
 		Object leftExpr = this.onGoingExpression.pop();
 		append(obj.getRightExpression());
 		Object rightExpr = this.onGoingExpression.pop();
-		
+
 		BasicDBList values = new BasicDBList();
 		values.add(0, leftExpr);
 		values.add(1, rightExpr);
@@ -665,27 +714,21 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 		switch(obj.getOperator()) {
 		case EQ:
 			this.onGoingExpression.push(new BasicDBObject("$eq", values)); //$NON-NLS-1$
-			this.onGoingPullCriteria.push(new BasicDBObject("$eq", values)); //$NON-NLS-1$
 			break;
 		case NE:
 			this.onGoingExpression.push(new BasicDBObject("$ne", values)); //$NON-NLS-1$
-			this.onGoingPullCriteria.push(new BasicDBObject("$ne", values)); //$NON-NLS-1$
 			break;
 		case LT:
 			this.onGoingExpression.push(new BasicDBObject("$lt", values)); //$NON-NLS-1$
-			this.onGoingPullCriteria.push(new BasicDBObject("$lt", values)); //$NON-NLS-1$
 			break;
 		case LE:
 			this.onGoingExpression.push(new BasicDBObject("$lte", values)); //$NON-NLS-1$
-			this.onGoingPullCriteria.push(new BasicDBObject("$lte", values)); //$NON-NLS-1$
 			break;
 		case GT:
 			this.onGoingExpression.push(new BasicDBObject("$gt", values)); //$NON-NLS-1$
-			this.onGoingPullCriteria.push(new BasicDBObject("$gt", values)); //$NON-NLS-1$
 			break;
 		case GE:
 			this.onGoingExpression.push(new BasicDBObject("$gte", values)); //$NON-NLS-1$
-			this.onGoingPullCriteria.push(new BasicDBObject("$gte", values)); //$NON-NLS-1$
 			break;
 		}
 	}
@@ -697,20 +740,25 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
         DBObject right = (DBObject)this.onGoingExpression.pop();
         DBObject left = (DBObject) this.onGoingExpression.pop();
 
-        DBObject pullRight = this.onGoingPullCriteria.pop();
-        DBObject pullLeft = this.onGoingPullCriteria.pop();
-
         switch(obj.getOperator()) {
         case AND:
         	this.onGoingExpression.push(QueryBuilder.start().and(left, right).get());
-        	this.onGoingPullCriteria.push(QueryBuilder.start().and(pullLeft, pullRight).get());
         	break;
         case OR:
         	this.onGoingExpression.push(QueryBuilder.start().or(left, right).get());
-        	this.onGoingPullCriteria.push(QueryBuilder.start().or(pullLeft, pullRight).get());
         	break;
         }
     }
+
+	@Override
+    public void visit(Array array) {
+	    append(array.getExpressions());
+	    BasicDBList values = new BasicDBList();
+	    for (int i = 0; i < array.getExpressions().size(); i++) {
+	        values.add(0, this.onGoingExpression.pop());
+	    }
+	    this.onGoingExpression.push(values);
+	}
 
 	@Override
 	public void visit(Literal obj) {
@@ -723,115 +771,126 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 
 	@Override
 	public void visit(In obj) {
-		ColumnAlias exprAlias = getExpressionAlias(obj.getLeftExpression());
-		QueryBuilder query = QueryBuilder.start(exprAlias.selectionName);
-		QueryBuilder pullQuery = QueryBuilder.start(exprAlias.pullColumnName);
-
-    	append(obj.getRightExpressions());
-
-        BasicDBList values = new BasicDBList();
-        for (int i = 0; i < obj.getRightExpressions().size(); i++) {
-        	values.add(0, this.onGoingExpression.pop());
-        }
-
-		if (query != null) {
-			if (obj.isNegated()) {
-				query.notIn(values);
-				pullQuery.notIn(values);
-			} else {
-				query.in(values);
-				pullQuery.in(values);
-			}
-			this.onGoingExpression.push(query.get());
-			this.onGoingPullCriteria.push(pullQuery.get());
+		append(obj.getLeftExpression());
+		Object expr = this.onGoingExpression.pop();
+		ColumnDetail detail = this.expressionMap.get(expr);
+		QueryBuilder query = QueryBuilder.start();
+		if (detail == null) {
+	        this.exceptions.add(new TranslatorException(MongoDBPlugin.Event.TEIID18031, MongoDBPlugin.Util.gs(MongoDBPlugin.Event.TEIID18031)));
+		}
+		else {
+			query = detail.getQueryBuilder();
+			this.onGoingExpression.push(buildInQuery(obj, query).get());
 		}
 	}
 
-	private ColumnAlias getExpressionAlias(Expression obj) {
+    protected QueryBuilder buildInQuery(In obj, QueryBuilder query) {
+        append(obj.getRightExpressions());
+        BasicDBList values = new BasicDBList();
+        for (int i = 0; i < obj.getRightExpressions().size(); i++) {
+            values.add(0, this.onGoingExpression.pop());
+        }
+        if (obj.isNegated()) {
+            query.notIn(values);
+        } else {
+            query.in(values);
+        }
+        return query;
+    }
+
+	ColumnDetail getExpressionAlias(Expression obj) {
 		// the way DBRef names handled in projection vs selection is different.
 		// in projection we want to see as "col" mapped to "col.$_id" as it is treated as sub-document
 		// where as in selection it will should be "col._id".
 		append(obj);
 
 		Object expr = this.onGoingExpression.pop();
-		ColumnAlias exprAlias = implicitProject(obj, expr);
-//		if (exprAlias == null) {
-//			exprAlias = buildAlias(null);
-//			this.expressionMap.put(expr, exprAlias);
-//		}
+		ColumnDetail detail = this.expressionMap.get(expr);
+		detail = implicitProject(obj, expr, detail, detail != null ? detail.getProjectedName():null);
 
 		// when expression shows up in a condition, but it is not a derived column
 		// then add implicit project on that alias.
-		return exprAlias;
+		return detail;
 	}
 
 	@Override
 	public void visit(IsNull obj) {
-		ColumnAlias exprAlias = getExpressionAlias(obj.getExpression());
-		QueryBuilder query = QueryBuilder.start(exprAlias.selectionName);
-		QueryBuilder pullQuery = QueryBuilder.start(exprAlias.pullColumnName);
-
-		if (query != null) {
-			if (obj.isNegated()) {
-				query.notEquals(null);
-				pullQuery.notEquals(null);
-			}
-			else {
-				query.is(null);
-				pullQuery.is(null);
-			}
-			this.onGoingExpression.push(query.get());
-			this.onGoingPullCriteria.push(pullQuery.get());
+		append(obj.getExpression());
+		Object expr = this.onGoingExpression.pop();
+		ColumnDetail detail = this.expressionMap.get(expr);
+		QueryBuilder query = QueryBuilder.start();
+		if (detail == null) {
+	        this.exceptions.add(new TranslatorException(MongoDBPlugin.Event.TEIID18032, MongoDBPlugin.Util.gs(MongoDBPlugin.Event.TEIID18032)));
+		}
+		else {
+			query = detail.getQueryBuilder();
+			this.onGoingExpression.push(buildIsNullQuery(obj, query).get());
 		}
 	}
+
+    protected QueryBuilder buildIsNullQuery(IsNull obj, QueryBuilder query) {
+        if (obj.isNegated()) {
+            query.notEquals(null);
+        }
+        else {
+            query.is(null);
+        }
+        return query;
+    }
 
 	@Override
 	public void visit(Like obj) {
-		ColumnAlias exprAlias = getExpressionAlias(obj.getLeftExpression());
-		QueryBuilder query = QueryBuilder.start(exprAlias.selectionName);
-		QueryBuilder pullQuery = QueryBuilder.start(exprAlias.pullColumnName);
-
-		if (query != null) {
-			if (obj.isNegated()) {
-				query.not();
-				pullQuery.not();
-			}
-
-			append(obj.getRightExpression());
-
-			StringBuilder value = new StringBuilder((String)this.onGoingExpression.pop());
-			int idx = -1;
-			while (true) {
-				idx = value.indexOf("%", idx+1);//$NON-NLS-1$
-				if (idx != -1 && idx == 0) {
-					continue;
-				}
-				if (idx != -1 && idx == value.length()-1) {
-					continue;
-				}
-
-				if (idx == -1) {
-					break;
-				}
-				value.replace(idx, idx+1, ".*"); //$NON-NLS-1$
-			}
-
-			if (value.charAt(0) != '%') {
-				value.insert(0, '^');
-			}
-
-			idx = value.length();
-			if (value.charAt(idx-1) != '%') {
-				value.insert(idx, '$');
-			}
-
-			String regex = value.toString().replaceAll("%", ""); //$NON-NLS-1$ //$NON-NLS-2$
-			query.is(Pattern.compile(regex));
-			pullQuery.is(Pattern.compile(regex));
+		append(obj.getLeftExpression());
+		Object expr = this.onGoingExpression.pop();
+		ColumnDetail detail = this.expressionMap.get(expr);
+		QueryBuilder query = QueryBuilder.start();
+		if (detail == null) {
+			this.exceptions.add(new TranslatorException(MongoDBPlugin.Event.TEIID18033, MongoDBPlugin.Util.gs(MongoDBPlugin.Event.TEIID18033)));
+		}
+		else {
+			query = detail.getQueryBuilder();
+			buildLikeQuery(obj, query);
 			this.onGoingExpression.push(query.get());
-			this.onGoingPullCriteria.push(pullQuery.get());
 		}
 	}
+
+    protected QueryBuilder buildLikeQuery(Like obj, QueryBuilder query) {
+		if (obj.isNegated()) {
+			query.not();
+		}
+
+		append(obj.getRightExpression());
+
+		StringBuilder value = new StringBuilder((String)this.onGoingExpression.pop());
+		int idx = -1;
+		while (true) {
+			idx = value.indexOf("%", idx+1);//$NON-NLS-1$
+			if (idx != -1 && idx == 0) {
+				continue;
+			}
+			if (idx != -1 && idx == value.length()-1) {
+				continue;
+			}
+
+			if (idx == -1) {
+				break;
+			}
+			value.replace(idx, idx+1, ".*"); //$NON-NLS-1$
+		}
+
+		if (value.charAt(0) != '%') {
+			value.insert(0, '^');
+		}
+
+		idx = value.length();
+		if (value.charAt(idx-1) != '%') {
+			value.insert(idx, '$');
+		}
+
+		String regex = value.toString().replaceAll("%", ""); //$NON-NLS-1$ //$NON-NLS-2$
+		query.is(Pattern.compile(regex));
+		return query;
+    }
 
 	@Override
 	public void visit(Limit obj) {
@@ -850,23 +909,28 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 	public void visit(SortSpecification obj) {
 		append(obj.getExpression());
 		Object expr = this.onGoingExpression.pop();
-		ColumnAlias alias = this.expressionMap.get(expr);
+		ColumnDetail alias = this.expressionMap.get(expr);
 		if (this.sort == null) {
-			this.sort =  new BasicDBObject(alias.projectedName, (obj.getOrdering() == Ordering.ASC)?1:-1);
+			this.sort =  new BasicDBObject(alias.getProjectedName(), (obj.getOrdering() == Ordering.ASC)?1:-1);
 		}
 		else {
-			this.sort.put(alias.projectedName, (obj.getOrdering() == Ordering.ASC)?1:-1);
+			this.sort.put(alias.getProjectedName(), (obj.getOrdering() == Ordering.ASC)?1:-1);
 		}
 	}
 
 	@Override
 	public void visit(GroupBy obj) {
+		// since grouping requires additional step, this is done at a different pipeline stage.
+		// so, that requires additional in-direction.
 		if (obj.getElements().size() == 1) {
 			append(obj.getElements().get(0));
 			Object mongoExpr = this.onGoingExpression.pop();
-			ColumnAlias alias = this.expressionMap.get(mongoExpr);
-			this.group.put("_id", new BasicDBObject(alias.projectedName, mongoExpr)); //$NON-NLS-1$
-			this.groupByProjections.put("_id", new BasicDBObject(alias.projectedName, "$_id."+alias.projectedName)); //$NON-NLS-1$ //$NON-NLS-2$
+			ColumnDetail exprDetails = this.expressionMap.get(mongoExpr);
+			String projectedName = "_c"+this.columnCount.getAndIncrement(); //$NON-NLS-1$
+			exprDetails.addProjectedName(projectedName);
+			this.group.put("_id", new BasicDBObject(projectedName, mongoExpr)); //$NON-NLS-1$
+			this.groupByProjections.put("_id", new BasicDBObject(projectedName, "$_id."+projectedName)); //$NON-NLS-1$ //$NON-NLS-2$
+			exprDetails.partOfGroupBy = true;
 		}
 		else {
 			BasicDBObject fields = new BasicDBObject();
@@ -874,9 +938,12 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 			for (Expression expr : obj.getElements()) {
 				append(expr);
 				Object mongoExpr = this.onGoingExpression.pop();
-				ColumnAlias alias = this.expressionMap.get(mongoExpr);
-				exprs.put(alias.projectedName, mongoExpr);
-				fields.put(alias.projectedName, "$_id."+alias.projectedName); //$NON-NLS-1$
+				ColumnDetail exprDetails = this.expressionMap.get(mongoExpr);
+				String projectedName = "_c"+this.columnCount.getAndIncrement(); //$NON-NLS-1$
+				exprDetails.addProjectedName(projectedName);
+				exprs.put(projectedName, mongoExpr);
+				fields.put(projectedName, "$_id."+projectedName); //$NON-NLS-1$
+				exprDetails.partOfGroupBy = true;
 			}
 			this.group.put("_id", exprs); //$NON-NLS-1$
 			this.groupByProjections.put("_id", fields); //$NON-NLS-1$
@@ -928,5 +995,72 @@ public class MongoDBSelectVisitor extends HierarchyVisitor {
 			names.add(c.getName());
 		}
 		return names;
+	}
+
+	static enum SpatialType {Point, LineString, Polygon, MultiPoint, MultiLineString};
+
+	private DBObject handleGeoSpatialFunction(String functionName, Function function) {
+		if (functionName.equalsIgnoreCase(MongoDBExecutionFactory.FUNC_GEO_NEAR) ||
+				functionName.equalsIgnoreCase(MongoDBExecutionFactory.FUNC_GEO_NEAR_SPHERE)) {
+			return buildGeoNearFunction(function);
+		}
+		return buildGeoFunction(function);
+	}
+
+	private DBObject buildGeoNearFunction(Function function) {
+		List<Expression> args = function.getParameters();
+
+		// Column Name
+		int paramIndex = 0;
+		ColumnDetail column = getExpressionAlias(args.get(paramIndex++));
+
+		BasicDBObjectBuilder builder = BasicDBObjectBuilder.start();
+		builder.push(column.documentFieldName);
+		builder.push(function.getName());
+		builder.push("$geometry");//$NON-NLS-1$
+		builder.add("type", SpatialType.Point.name());//$NON-NLS-1$
+
+		// walk the co-ordinates
+		append(args.get(paramIndex++));
+		BasicDBList coordinates = new BasicDBList();
+		coordinates.add(this.onGoingExpression.pop());
+		builder.add("coordinates", coordinates); //$NON-NLS-1$
+
+		// maxdistance
+		append(args.get(paramIndex++));
+		BasicDBObjectBuilder b= builder.pop();
+		b.add("$maxDistance", this.onGoingExpression.pop()); //$NON-NLS-1$
+
+		if (this.executionFactory.getVersion().compareTo(MongoDBExecutionFactory.TWO_6) >= 0) {
+            // mindistance
+            append(args.get(paramIndex++));
+            b.add("$minDistance", this.onGoingExpression.pop()); //$NON-NLS-1$
+		}
+		return builder.get();
+	}
+
+	private DBObject buildGeoFunction(Function function) {
+		List<Expression> args = function.getParameters();
+
+		// Column Name
+		int paramIndex = 0;
+		ColumnDetail column = getExpressionAlias(args.get(paramIndex++));
+
+		// Type: Point, LineString, Polygon..
+		append(args.get(paramIndex++));
+		SpatialType type = SpatialType.valueOf((String)this.onGoingExpression.pop());
+
+		BasicDBObjectBuilder builder = BasicDBObjectBuilder.start();
+		builder.push(column.documentFieldName);
+		builder.push(function.getName());
+		builder.push("$geometry");//$NON-NLS-1$
+		builder.add("type", type.name());//$NON-NLS-1$
+
+		// walk the co-ordinates
+		append(args.get(paramIndex++));
+		BasicDBList coordinates = new BasicDBList();
+		coordinates.add(this.onGoingExpression.pop());
+		builder.add("coordinates", coordinates); //$NON-NLS-1$
+		return builder.get();
 	}
 }

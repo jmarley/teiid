@@ -23,6 +23,7 @@ package org.teiid.translator.infinispan.dsl;
 
 import static org.junit.Assert.assertNotNull;
 
+import org.jboss.as.quickstarts.datagrid.hotrod.query.domain.PersonCacheSource;
 import org.junit.Before;
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -31,7 +32,7 @@ import org.mockito.MockitoAnnotations;
 import org.teiid.language.Select;
 import org.teiid.translator.ExecutionContext;
 import org.teiid.translator.TranslatorException;
-import org.teiid.translator.infinispan.dsl.util.VDBUtility;
+import org.teiid.translator.infinispan.dsl.util.PersonSchemaVDBUtility;
 
 @SuppressWarnings("nls")
 public class TestInfinispanExecutionFactory {
@@ -45,8 +46,8 @@ public class TestInfinispanExecutionFactory {
 	@Mock
 	private Select command;
 	
-	@Mock
-	private InfinispanConnection connection;
+	
+	private InfinispanConnection connection = PersonCacheSource.createConnection(true);
 	
     @BeforeClass
     public static void setUp() throws TranslatorException {
@@ -61,7 +62,7 @@ public class TestInfinispanExecutionFactory {
 
 	@Test public void testFactory() throws Exception {
 
-		InfinispanExecution exec = (InfinispanExecution) TRANSLATOR.createExecution(command, context, VDBUtility.RUNTIME_METADATA, connection);
+		InfinispanExecution exec = (InfinispanExecution) TRANSLATOR.createExecution(command, context, PersonSchemaVDBUtility.RUNTIME_METADATA, connection);
 		
 		assertNotNull(exec);
 		assertNotNull(TRANSLATOR.getMetadataProcessor());

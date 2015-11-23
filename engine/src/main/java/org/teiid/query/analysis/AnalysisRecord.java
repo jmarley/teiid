@@ -61,11 +61,14 @@ public class AnalysisRecord {
 
 	// Common 
     public static final String PROP_OUTPUT_COLS = "Output Columns"; //$NON-NLS-1$
+    public static final String PROP_ID = "Relational Node ID"; //$NON-NLS-1$
+    public static final String PROP_DATA_BYTES_SENT = "Data Bytes Sent"; //$NON-NLS-1$
     
     // Relational
     public static final String PROP_CRITERIA = "Criteria"; //$NON-NLS-1$
     public static final String PROP_SELECT_COLS = "Select Columns"; //$NON-NLS-1$
     public static final String PROP_GROUP_COLS = "Grouping Columns"; //$NON-NLS-1$
+    public static final String PROP_GROUP_MAPPING = "Grouping Mapping"; //$NON-NLS-1$
     public static final String PROP_SQL = "Query"; //$NON-NLS-1$
     public static final String PROP_MODEL_NAME = "Model Name"; //$NON-NLS-1$
     public static final String PROP_SHARING_ID = "Sharing ID"; //$NON-NLS-1$
@@ -83,7 +86,10 @@ public class AnalysisRecord {
     public static final String PROP_ROW_OFFSET = "Row Offset";  //$NON-NLS-1$
     public static final String PROP_ROW_LIMIT = "Row Limit";  //$NON-NLS-1$
     public static final String PROP_WITH = "With"; //$NON-NLS-1$
-    
+    public static final String PROP_WINDOW_FUNCTIONS = "Window Functions"; //$NON-NLS-1$
+    //Table functions
+	public static final String PROP_TABLE_FUNCTION = "Table Function"; //$NON-NLS-1$
+	
     // XML
     public static final String PROP_MESSAGE = "Message"; //$NON-NLS-1$
     public static final String PROP_TAG = "Tag"; //$NON-NLS-1$
@@ -109,6 +115,8 @@ public class AnalysisRecord {
     public static final String PROP_THEN = "Then"; //$NON-NLS-1$
     public static final String PROP_ELSE = "Else"; //$NON-NLS-1$
 
+	public static final String PROP_PLANNING_TIME = "Planning Time"; //$NON-NLS-1$
+
     // Flags regarding what should be recorded
     private boolean recordQueryPlan;
     private boolean recordDebug;
@@ -121,8 +129,8 @@ public class AnalysisRecord {
     private PrintWriter debugWriter;    // public
     
     public AnalysisRecord(boolean recordQueryPlan, boolean recordDebug) {
-    	this.recordQueryPlan = recordQueryPlan | LogManager.isMessageToBeRecorded(LogConstants.CTX_QUERY_PLANNER, MessageLevel.DETAIL);
-        this.recordDebug = recordDebug | LogManager.isMessageToBeRecorded(LogConstants.CTX_QUERY_PLANNER, MessageLevel.TRACE);
+    	this.recordQueryPlan = recordQueryPlan || LogManager.isMessageToBeRecorded(LogConstants.CTX_QUERY_PLANNER, MessageLevel.DETAIL);
+        this.recordDebug = recordDebug || LogManager.isMessageToBeRecorded(LogConstants.CTX_QUERY_PLANNER, MessageLevel.TRACE);
         
         if(this.recordQueryPlan) {
             this.annotations = new ArrayList<Annotation>();
@@ -174,7 +182,7 @@ public class AnalysisRecord {
     public void addAnnotation(Annotation annotation) {
         this.annotations.add(annotation);
         if (this.recordDebug()) {
-        	this.println(annotation.getPriority() + " " + annotation.getCategory() + " " + annotation.getAnnotation() + " - " + annotation.getResolution()); //$NON-NLS-1$ //$NON-NLS-2$ //$NON-NLS-3$
+        	this.println(annotation.toString());
         }
     }
     
@@ -233,7 +241,7 @@ public class AnalysisRecord {
 	    return Collections.emptyList();
 	}
 	
-	public static void addLanaguageObjects(PlanNode node, String key, List<? extends LanguageObject> objects) {
+	public static void addLanaguageObjects(PlanNode node, String key, Collection<? extends LanguageObject> objects) {
 		List<String> values = new ArrayList<String>();
 		int index = 0;
 		for (LanguageObject languageObject : objects) {

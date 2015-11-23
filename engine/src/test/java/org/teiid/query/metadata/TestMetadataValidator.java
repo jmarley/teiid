@@ -68,7 +68,7 @@ public class TestMetadataValidator {
 		mf.setParser(QueryParser.getQueryParser());
 		mf.setBuiltinDataTypes(SystemMetadata.getInstance().getSystemStore().getDatatypes());
 		mf.getSchema().setPhysical(physical);
-		repo.loadMetadata(mf, null, null);
+		repo.loadMetadata(mf, null, null, ddl);
 		mf.mergeInto(store);
 		model.addAttchment(MetadataFactory.class, mf);
 		return model;
@@ -131,6 +131,28 @@ public class TestMetadataValidator {
 		buildTransformationMetadata();
 		ValidatorReport report = new ValidatorReport();
 		new MetadataValidator.ResolveQueryPlans().execute(vdb, store, report, new MetadataValidator());
+		assertTrue(printError(report), report.hasItems());			
+	}
+	
+	@Test
+	public void testCreateTrigger() throws Exception {
+		String ddl = "create view g1 options (updatable true) AS select * from pm1.g1; " +
+				"create trigger on g1 INSTEAD OF UPDATE AS FOR EACH ROW BEGIN ATOMIC END; ";
+		buildModel("pm1", true, this.vdb, this.store, "create foreign table g1(e1 integer, e2 varchar(12));");
+		buildModel("vm1", false, this.vdb, this.store, ddl);
+		buildTransformationMetadata();
+		ValidatorReport report = new MetadataValidator().validate(vdb, store);
+		assertFalse(printError(report), report.hasItems());			
+	}
+	
+	@Test
+	public void testCreateTriggerFails() throws Exception {
+		String ddl = "create view g1 options (updatable true) AS select * from pm1.g1; " +
+				"create trigger on g1 instead of update as for each row begin if (\"new\" is distinct from pm1.g1) select 1; END; ";
+		buildModel("pm1", true, this.vdb, this.store, "create foreign table g1(e1 integer, e2 varchar(12));");
+		buildModel("vm1", false, this.vdb, this.store, ddl);
+		buildTransformationMetadata();
+		ValidatorReport report = new MetadataValidator().validate(vdb, store);
 		assertTrue(printError(report), report.hasItems());			
 	}
 	
@@ -347,6 +369,11 @@ public class TestMetadataValidator {
 		helpTest(ddl, true);
 	}
 	
+	@Test public void testVirtualFunction() throws Exception {
+		String ddl = "CREATE VIRTUAL FUNCTION f1(VARIADIC e1 integer) RETURNS integer as return array_length(e1);";
+		helpTest(ddl, false);
+	}
+	
 	@Test public void testFBIResolveError() throws Exception {
 		String ddl = "CREATE view G1(e1 integer, e2 varchar, CONSTRAINT fbi INDEX (UPPER(e3))) options (materialized true) as select 1, 'a'";
 		helpTest(ddl, true);
@@ -402,7 +429,16 @@ public class TestMetadataValidator {
 		ValidatorReport report = new MetadataValidator().validate(this.vdb, this.store);
 		assertFalse(printError(report), report.hasItems());
     }
-
+    
+    @Test public void testFunctionProcedureValidation() throws Exception {
+    	buildModel("phy1", true, this.vdb, this.store, "CREATE VIRTUAL FUNCTION f1(VARIADIC x integer) RETURNS integer as return (select e1 from g1 where e2 = array_length(x)); create foreign table g1 (e1 string, e2 integer);");
+    	
+		buildTransformationMetadata();
+		
+		ValidatorReport report = new MetadataValidator().validate(this.vdb, this.store);
+		assertTrue(printError(report), report.hasItems());
+    }
+    
 	private ValidatorReport helpTest(String ddl, boolean expectErrors) throws Exception {
 		buildModel("pm1", true, this.vdb, this.store, ddl);
 		

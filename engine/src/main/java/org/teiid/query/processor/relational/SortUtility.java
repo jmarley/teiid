@@ -59,8 +59,7 @@ public class SortUtility {
 	
 	public enum Mode {
 		SORT,
-		/** Removes duplicates, no sort elements need to be specified.
-		 *  may perform additional passes as new batches become available 
+		/** Removes duplicates for the sort items 
 		 */
 		DUP_REMOVE, 
 		/** Removes duplicates, but guarantees order based upon the sort elements.
@@ -99,15 +98,10 @@ public class SortUtility {
     private int batchSize;
 	private ListNestedSortComparator comparator;
 	private int targetRowCount;
-
-    private TupleBuffer output;
     private boolean doneReading;
     private int phase = INITIAL_SORT;
     private List<TupleBuffer> activeTupleBuffers = new ArrayList<TupleBuffer>();
-    private int masterSortIndex;
     
-    private int processed;
-
     // Phase constants for readability
     private static final int INITIAL_SORT = 1;
     private static final int MERGE = 2;
@@ -183,7 +177,7 @@ public class SortUtility {
         this.schemaSize = bufferManager.getSchemaSize(this.schema);
         this.batchSize = bufferManager.getProcessorBatchSize(this.schema);
         this.targetRowCount = Math.max(bufferManager.getMaxProcessingSize()/this.schemaSize, 2)*this.batchSize;
-        this.comparator = new ListNestedSortComparator(cols, sortTypes);
+        this.comparator = new ListNestedSortComparator(cols, sortTypes).defaultNullOrder(bufferMgr.getOptions().getDefaultNullOrder());
         int distinctIndex = cols.length - 1;
         this.comparator.setDistinctIndex(distinctIndex);
         this.comparator.setNullOrdering(nullOrderings);
@@ -206,9 +200,6 @@ public class SortUtility {
 	            mergePhase();
 	        }
 	        success = true;
-	        if (this.output != null) {
-	        	return this.output;
-	        }
 	        return this.activeTupleBuffers.get(0);
     	} catch (BlockedException e) {
     		success = true;
@@ -222,7 +213,6 @@ public class SortUtility {
     
     public List<TupleBuffer> onePassSort(boolean lowLatency) throws TeiidComponentException, TeiidProcessingException {
     	boolean success = false;
-    	assert this.mode != Mode.DUP_REMOVE;
     	try {
 	    	if(this.phase == INITIAL_SORT) {
 	            initialSort(true, lowLatency);
@@ -286,21 +276,13 @@ public class SortUtility {
 		            	 * 2. a streaming dup removal
 		            	 * 3. a one pass sort (for grace join like processing)
 		            	 */
-		            	if (!onePass && mode != Mode.DUP_REMOVE) {
+		            	if (!onePass) {
 		            		throw e; //read fully before processing
 		            	}
-		            	if (!onePass) {
-		            		//streaming dup remove - we have to balance latency vs. performance
-		            		//each merge phase is a full scan over the intermediate results
-		            		if (this.output != null && this.workingBuffer.getRowCount() < 2*this.processed) {
-		            			throw e;
-		            		}
-		            	} else {
-		            		//we're trying to create intermediate buffers that will comfortably be small memory sorts
-		            		if (this.workingBuffer.getRowCount() < this.targetRowCount) {
-		            			throw e;
-		            		}	
-		            	}
+	            		//we're trying to create intermediate buffers that will comfortably be small memory sorts
+	            		if (this.workingBuffer.getRowCount() < this.targetRowCount) {
+	            			throw e;
+	            		}	
 		            	break outer; //there's processing that we can do
 		            } 
 	    		}
@@ -340,8 +322,7 @@ public class SortUtility {
 				}
 			}
 			TupleBufferTupleSource ts = workingBuffer.createIndexedTupleSource(source != null);
-			ts.setReverse((!stableSort || mode == Mode.DUP_REMOVE) && workingBuffer.getRowCount() > this.batchSize);
-			processed+=this.workingBuffer.getRowCount();
+			ts.setReverse(!stableSort && workingBuffer.getRowCount() > this.batchSize);
 			maxRows = Math.max(1, (totalReservedBuffers/schemaSize))*batchSize;
             if (mode == Mode.SORT) {
             	workingTuples = new ArrayList<List<?>>();
@@ -400,7 +381,20 @@ public class SortUtility {
 	}
     
     protected void mergePhase() throws TeiidComponentException, TeiidProcessingException {
-        long desiredSpace = activeTupleBuffers.size() * (long)schemaSize;
+        if (this.activeTupleBuffers.size() > 1) {
+        	doMerge();
+        }
+    	
+        // Close sorted source (all others have been removed)
+    	Assertion.assertTrue(doneReading);
+    	activeTupleBuffers.get(0).close();
+    	activeTupleBuffers.get(0).setForwardOnly(false);
+        this.phase = DONE;
+        return;
+    }
+    
+    protected void doMerge() throws TeiidComponentException, TeiidProcessingException {
+    	long desiredSpace = activeTupleBuffers.size() * (long)schemaSize;
         int toForce = (int)Math.min(desiredSpace, Math.max(2*schemaSize, this.bufferManager.getMaxProcessingSize()));
         int reserved = 0;
         
@@ -422,6 +416,7 @@ public class SortUtility {
 		    				needed++;
 		    			}	
 	        	        reserved += bufferManager.reserveBuffersBlocking(needed * schemaSize - toForce, attempts, true);
+	        	        LogManager.logWarning(LogConstants.CTX_DQP, "performing three pass sort"); //$NON-NLS-1$
 	        		}
 	        	} else if (desiredSpace < Integer.MAX_VALUE) {
 	        		//wait for 1-pass
@@ -462,9 +457,6 @@ public class SortUtility {
 	            	sortedSublist.its = activeID.createIndexedTupleSource();
 	            	sortedSublist.its.setNoBlocking(true);
 	            	sortedSublist.index = i;
-	            	if (activeID == output) {
-	            		sortedSublist.limit = output.getRowCount();
-	            	}
 	            	incrementWorkingTuple(sublists, sortedSublist);
 	            }
 	            
@@ -472,51 +464,20 @@ public class SortUtility {
 	            while (sublists.size() > 0) {
 	            	SortedSublist sortedSublist = sublists.remove(sublists.size() - 1);
 	        		merged.addTuple(sortedSublist.tuple);
-	                if (this.output != null && masterSortIndex < maxSortIndex && sortedSublist.index != masterSortIndex) {
-	                	this.output.addTuple(sortedSublist.tuple); //a new distinct row
-	            	}
 	            	incrementWorkingTuple(sublists, sortedSublist);
 	            }                
 	
 	            // Remove merged sublists
 	            for(int i=0; i<maxSortIndex; i++) {
 	            	TupleBuffer id = activeTupleBuffers.remove(0);
-	            	if (id != this.output) {
-	            		id.remove();
-	            	}
+            		id.remove();
 	            }
 	            merged.saveBatch();
 	            this.activeTupleBuffers.add(merged);           
-	            masterSortIndex = masterSortIndex - maxSortIndex;
-	            if (masterSortIndex < 0) {
-	            	masterSortIndex = this.activeTupleBuffers.size() - 1;
-	            }
     		}
         } finally {
         	this.bufferManager.releaseBuffers(reserved);
         }
-    	
-        // Close sorted source (all others have been removed)
-        if (doneReading) {
-        	if (this.output != null) {
-	        	this.output.close();
-	        	TupleBuffer last = activeTupleBuffers.remove(0);
-	        	if (output != last) {
-	        		last.remove();
-	        	}
-	        } else {
-	        	activeTupleBuffers.get(0).close();
-	        	activeTupleBuffers.get(0).setForwardOnly(false);
-	        }
-	        this.phase = DONE;
-	        return;
-        }
-    	Assertion.assertTrue(mode == Mode.DUP_REMOVE);
-    	if (this.output == null) {
-    		this.output = activeTupleBuffers.get(0);
-    		this.output.setForwardOnly(false);
-    	}
-    	this.phase = INITIAL_SORT;
     }
 
 	private void incrementWorkingTuple(ArrayList<SortedSublist> subLists, SortedSublist sortedSublist) throws TeiidComponentException, TeiidProcessingException {
@@ -538,13 +499,6 @@ public class SortUtility {
 				subLists.add(index, sortedSublist);
 				return;
 			} 
-			/* In dup removal mode we need to ensure that a sublist other than the master is incremented
-			 */
-			if (mode == Mode.DUP_REMOVE && this.output != null && sortedSublist.index == masterSortIndex) {
-				SortedSublist dup = subLists.get(index);
-				subLists.set(index, sortedSublist);
-				sortedSublist = dup;
-			}
 		}
 	} 
 
@@ -562,14 +516,13 @@ public class SortUtility {
 			//they should not be reused whole
 			for (int i = 0; i < this.activeTupleBuffers.size(); i++) {
 				TupleBuffer tb = this.activeTupleBuffers.get(i);
-				if (tb == output || (i == 0 && phase == DONE)) {
+				if (i == 0 && phase == DONE) {
 					continue;
 				}
 				tb.remove();
 			}
 			this.activeTupleBuffers.clear();
 		}
-		this.output = null;
 	}
 
 	public void setNonBlocking(boolean b) {

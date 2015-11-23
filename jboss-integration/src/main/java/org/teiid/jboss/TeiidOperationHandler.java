@@ -29,15 +29,24 @@ import java.sql.Blob;
 import java.sql.Clob;
 import java.sql.SQLException;
 import java.sql.SQLXML;
-import java.util.*;
-import java.util.concurrent.Callable;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.EnumSet;
+import java.util.List;
+import java.util.Locale;
+import java.util.ResourceBundle;
 import java.util.concurrent.Future;
-import java.util.concurrent.TimeUnit;
 
 import org.jboss.as.connector.metadata.xmldescriptors.ConnectorXmlDescriptor;
 import org.jboss.as.connector.services.resourceadapters.deployment.InactiveResourceAdapterDeploymentService.InactiveResourceAdapterDeployment;
 import org.jboss.as.connector.util.ConnectorServices;
-import org.jboss.as.controller.*;
+import org.jboss.as.controller.AbstractWriteAttributeHandler;
+import org.jboss.as.controller.AttributeDefinition;
+import org.jboss.as.controller.OperationContext;
+import org.jboss.as.controller.OperationDefinition;
+import org.jboss.as.controller.OperationFailedException;
+import org.jboss.as.controller.PathAddress;
+import org.jboss.as.controller.SimpleOperationDefinitionBuilder;
 import org.jboss.as.controller.descriptions.DefaultOperationDescriptionProvider;
 import org.jboss.as.controller.descriptions.DescriptionProvider;
 import org.jboss.as.controller.descriptions.ResourceDescriptionResolver;
@@ -45,30 +54,41 @@ import org.jboss.as.controller.registry.OperationEntry;
 import org.jboss.as.server.deployment.DeploymentUnit;
 import org.jboss.dmr.ModelNode;
 import org.jboss.dmr.ModelType;
-import org.jboss.jca.common.api.metadata.ra.ConfigProperty;
-import org.jboss.jca.common.api.metadata.ra.ConnectionDefinition;
-import org.jboss.jca.common.api.metadata.ra.ResourceAdapter;
-import org.jboss.jca.common.api.metadata.ra.ResourceAdapter1516;
+import org.jboss.jca.common.api.metadata.spec.ConfigProperty;
+import org.jboss.jca.common.api.metadata.spec.ConnectionDefinition;
+import org.jboss.jca.common.api.metadata.spec.ResourceAdapter;
 import org.jboss.msc.service.ServiceController;
 import org.jboss.msc.service.ServiceName;
 import org.jboss.msc.service.ServiceRegistry;
-import org.teiid.adminapi.*;
+import org.teiid.adminapi.Admin;
 import org.teiid.adminapi.Admin.SchemaObjectType;
+import org.teiid.adminapi.Admin.TranlatorPropertyType;
+import org.teiid.adminapi.AdminException;
+import org.teiid.adminapi.AdminProcessingException;
+import org.teiid.adminapi.VDB;
 import org.teiid.adminapi.VDB.ConnectionType;
 import org.teiid.adminapi.VDB.Status;
-import org.teiid.adminapi.impl.*;
-import org.teiid.adminapi.impl.VDBMetadataMapper.TransactionMetadataMapper;
-import org.teiid.adminapi.impl.VDBMetadataMapper.VDBTranslatorMetaDataMapper;
-import org.teiid.client.RequestMessage;
-import org.teiid.client.ResultsMessage;
+import org.teiid.adminapi.impl.CacheStatisticsMetadata;
+import org.teiid.adminapi.impl.EngineStatisticsMetadata;
+import org.teiid.adminapi.impl.RequestMetadata;
+import org.teiid.adminapi.impl.SessionMetadata;
+import org.teiid.adminapi.impl.TransactionMetadata;
+import org.teiid.adminapi.impl.VDBMetaData;
+import org.teiid.adminapi.impl.VDBTranslatorMetaData;
+import org.teiid.adminapi.impl.WorkerPoolStatisticsMetadata;
+import org.teiid.adminapi.jboss.VDBMetadataMapper;
+import org.teiid.adminapi.jboss.VDBMetadataMapper.TransactionMetadataMapper;
+import org.teiid.adminapi.jboss.VDBMetadataMapper.VDBTranslatorMetaDataMapper;
 import org.teiid.client.plan.PlanNode;
-import org.teiid.client.util.ResultsFuture;
 import org.teiid.core.TeiidComponentException;
-import org.teiid.deployers.*;
+import org.teiid.deployers.ExtendedPropertyMetadata;
+import org.teiid.deployers.ExtendedPropertyMetadataList;
+import org.teiid.deployers.RuntimeVDB;
 import org.teiid.deployers.RuntimeVDB.ReplaceResult;
+import org.teiid.deployers.VDBRepository;
+import org.teiid.deployers.VDBStatusChecker;
 import org.teiid.dqp.internal.datamgr.TranslatorRepository;
 import org.teiid.dqp.internal.process.DQPCore;
-import org.teiid.dqp.internal.process.DQPWorkContext;
 import org.teiid.dqp.internal.process.SessionAwareCache;
 import org.teiid.jboss.TeiidServiceNames.InvalidServiceNameException;
 import org.teiid.logging.LogConstants;
@@ -77,7 +97,7 @@ import org.teiid.metadata.MetadataStore;
 import org.teiid.metadata.Schema;
 import org.teiid.query.metadata.DDLStringVisitor;
 import org.teiid.query.metadata.TransformationMetadata;
-import org.teiid.query.tempdata.TempTableDataManager;
+import org.teiid.runtime.EmbeddedAdminFactory;
 import org.teiid.translator.TranslatorProperty.PropertyType;
 import org.teiid.vdb.runtime.VDBKey;
 
@@ -99,11 +119,11 @@ abstract class TeiidOperationHandler extends BaseOperationHandler<DQPCore> {
 	    VDBRepository repo = VDBRepository.class.cast(sc.getValue());	
 		VDBMetaData vdb = repo.getLiveVDB(vdbName, vdbVersion);
 		if (vdb == null) {
-        	throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50102, vdb, vdbVersion)));
+        	throw new OperationFailedException(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50102, vdb, vdbVersion));
 		}
 		Status status = vdb.getStatus();
 		if (status != VDB.Status.ACTIVE) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50096, vdbName, vdbVersion, status)));
+			throw new OperationFailedException(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50096, vdbName, vdbVersion));
 		}
 		return vdb;
 	}
@@ -156,74 +176,23 @@ abstract class TeiidOperationHandler extends BaseOperationHandler<DQPCore> {
         return transports;
 	}
 	
-	public static ModelNode executeQuery(final VDBMetaData vdb,  final DQPCore engine, final String command, final long timoutInMilli, final ModelNode resultsNode, final boolean timeAsString) throws OperationFailedException {
-		String user = "CLI ADMIN"; //$NON-NLS-1$
-		LogManager.logDetail(LogConstants.CTX_RUNTIME, IntegrationPlugin.Util.getString("admin_executing", user, command)); //$NON-NLS-1$
-
-        final SessionMetadata session = TempTableDataManager.createTemporarySession(user, "admin-console", vdb); //$NON-NLS-1$
-
-		final long requestID =  0L;
-
-		DQPWorkContext workContext = new DQPWorkContext();
-		workContext.setUseCallingThread(true);
-		workContext.setSession(session);
-
-		try {
-			return workContext.runInContext(new Callable<ModelNode>() {
-				@Override
-				public ModelNode call() throws Exception {
-
-					long start = System.currentTimeMillis();
-					RequestMessage request = new RequestMessage(command);
-					request.setExecutionId(requestID);
-					request.setRowLimit(engine.getMaxRowsFetchSize()); // this would limit the number of rows that are returned.
-					Future<ResultsMessage> message = engine.executeRequest(requestID, request);
-					ResultsMessage rm = null;
-					if (timoutInMilli < 0) {
-						rm = message.get();
-					} else {
-						rm = message.get(timoutInMilli, TimeUnit.MILLISECONDS);
-					}
-			        if (rm.getException() != null) {
-			             throw new AdminProcessingException(IntegrationPlugin.Event.TEIID50047, rm.getException());
-			        }
-
-			        if (rm.isUpdateResult()) {
-			        	writeResults(resultsNode, Arrays.asList("update-count"), rm.getResultsList(), timeAsString); //$NON-NLS-1$
-			        }
-			        else {
-			        	writeResults(resultsNode, Arrays.asList(rm.getColumnNames()), rm.getResultsList(), timeAsString);
-
-				        while (rm.getFinalRow() == -1 || rm.getLastRow() < rm.getFinalRow()) {
-				        	long elapsed = System.currentTimeMillis() - start;
-							message = engine.processCursorRequest(requestID, rm.getLastRow()+1, 1024);
-							rm = message.get(timoutInMilli-elapsed, TimeUnit.MILLISECONDS);
-							writeResults(resultsNode, Arrays.asList(rm.getColumnNames()), rm.getResultsList(), timeAsString);
-				        }
-			        }
-
-			        long elapsed = System.currentTimeMillis() - start;
-			        ResultsFuture<?> response = engine.closeRequest(requestID);
-			        response.get(timoutInMilli-elapsed, TimeUnit.MILLISECONDS);
-					return resultsNode;
-				}
-			});
-		} catch (Throwable t) {
-			throw new OperationFailedException(new ModelNode().set(t.getMessage()));
-		} finally {
-			try {
-				workContext.runInContext(new Callable<Void>() {
-					@Override
-					public Void call() throws Exception {
-						engine.terminateSession(session.getSessionId());
-						return null;
-					}
-				});
-			} catch (Throwable e) {
-				throw new OperationFailedException(new ModelNode().set(e.getMessage()));
-			}
-		}
-	}
+    public static ModelNode executeQuery(final VDBMetaData vdb,  final DQPCore engine, final String command, final long timoutInMilli, final ModelNode resultsNode, final boolean timeAsString) throws OperationFailedException {
+        String user = "CLI ADMIN"; //$NON-NLS-1$
+        LogManager.logDetail(LogConstants.CTX_RUNTIME, IntegrationPlugin.Util.getString("admin_executing", user, command)); //$NON-NLS-1$
+        
+        try {
+            Future<?> f = DQPCore.executeQuery(command, vdb, user, "admin-console", timoutInMilli, engine, new DQPCore.ResultsListener() { //$NON-NLS-1$
+                @Override
+                public void onResults(List<String> columns, List<? extends List<?>> results) throws Exception {
+                    writeResults(resultsNode, columns, results, timeAsString);
+                }
+            }); 
+            f.get();
+        } catch (Throwable e) {
+            throw new OperationFailedException(e);
+        }
+        return resultsNode;
+    }	
 
 	private static void writeResults(ModelNode resultsNode, List<String> columns,  List<? extends List<?>> results, boolean timeAsString) throws SQLException {
 		for (List<?> row:results) {
@@ -348,7 +317,7 @@ class GetActiveSessionsCount extends TeiidOperationHandler{
 		try {
 			context.getResult().set(getSessionCount(context));
 		} catch (AdminException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -407,7 +376,7 @@ class ListRequestsPerSession extends TeiidOperationHandler{
 	@Override
 	protected void executeOperation(OperationContext context, DQPCore engine, ModelNode operation) throws OperationFailedException{
 		if (!operation.hasDefined(OperationsConstants.SESSION.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.SESSION.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.SESSION.getName()+MISSING));
 		}
 		boolean includeSourceQueries = true;
 		if (operation.hasDefined(OperationsConstants.INCLUDE_SOURCE.getName())) {
@@ -475,10 +444,10 @@ class ListRequestsPerVDB extends TeiidOperationHandler{
 	@Override
 	protected void executeOperation(OperationContext context, DQPCore engine, ModelNode operation) throws OperationFailedException{
 		if (!operation.hasDefined(OperationsConstants.VDB_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.VDB_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.VDB_NAME.getName()+MISSING));
 		}
 		if (!operation.hasDefined(OperationsConstants.VDB_VERSION.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.VDB_VERSION.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.VDB_VERSION.getName()+MISSING));
 		}
 
 		boolean includeSourceQueries = true;
@@ -543,7 +512,7 @@ class TerminateSession extends TeiidOperationHandler{
 	@Override
 	protected void executeOperation(OperationContext context, DQPCore engine, ModelNode operation) throws OperationFailedException{
 		if (!operation.hasDefined(OperationsConstants.SESSION.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.SESSION.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.SESSION.getName()+MISSING));
 		}
 		for (TransportService t: getTransportServices(context)) {
 			t.terminateSession(operation.get(OperationsConstants.SESSION.getName()).asString());
@@ -564,10 +533,10 @@ class CancelRequest extends TeiidOperationHandler{
 	protected void executeOperation(OperationContext context, DQPCore engine, ModelNode operation) throws OperationFailedException{
 		try {
 			if (!operation.hasDefined(OperationsConstants.SESSION.getName())) {
-				throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.SESSION.getName()+MISSING)));
+				throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.SESSION.getName()+MISSING));
 			}
 			if (!operation.hasDefined(OperationsConstants.EXECUTION_ID.getName())) {
-				throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.EXECUTION_ID.getName()+MISSING)));
+				throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.EXECUTION_ID.getName()+MISSING));
 			}
 			boolean pass = engine.cancelRequest(operation.get(OperationsConstants.SESSION.getName()).asString(), operation.get(OperationsConstants.EXECUTION_ID.getName()).asLong());
 			ModelNode result = context.getResult();
@@ -593,10 +562,10 @@ class GetPlan extends TeiidOperationHandler{
 	@Override
 	protected void executeOperation(OperationContext context, DQPCore engine, ModelNode operation) throws OperationFailedException{
 		if (!operation.hasDefined(OperationsConstants.SESSION.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.SESSION.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.SESSION.getName()+MISSING));
 		}
 		if (!operation.hasDefined(OperationsConstants.EXECUTION_ID.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.EXECUTION_ID.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.EXECUTION_ID.getName()+MISSING));
 		}
 		PlanNode plan = engine.getPlan(operation.get(OperationsConstants.SESSION.getName()).asString(), operation.get(OperationsConstants.EXECUTION_ID.getName()).asLong());
 		ModelNode result = context.getResult();
@@ -677,12 +646,12 @@ class ClearCache extends BaseCachehandler {
 	@Override
 	protected void executeOperation(OperationContext context, SessionAwareCache cache, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.CACHE_TYPE.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.CACHE_TYPE.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.CACHE_TYPE.getName()+MISSING));
 		}
 
 		String cacheType = operation.get(OperationsConstants.CACHE_TYPE.getName()).asString();
 		if (cache == null) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50071, cacheType)));
+			throw new OperationFailedException(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50071, cacheType));
 		}
 
 		if (operation.hasDefined(OperationsConstants.VDB_NAME.getName()) && operation.hasDefined(OperationsConstants.VDB_VERSION.getName())) {
@@ -715,25 +684,16 @@ class CacheStatistics extends BaseCachehandler {
 	@Override
 	protected void executeOperation(OperationContext context, SessionAwareCache cache, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.CACHE_TYPE.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.CACHE_TYPE.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.CACHE_TYPE.getName()+MISSING));
 		}
 		String cacheType = operation.get(OperationsConstants.CACHE_TYPE.getName()).asString();
 		if (cache == null) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50071, cacheType)));
+			throw new OperationFailedException(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50071, cacheType));
 		}
 
 		ModelNode result = context.getResult();
-		CacheStatisticsMetadata stats = buildCacheStats(cacheType, cache);
+		CacheStatisticsMetadata stats = cache.buildCacheStats(cacheType);
 		VDBMetadataMapper.CacheStatisticsMetadataMapper.INSTANCE.wrap(stats, result);
-	}
-
-	private CacheStatisticsMetadata buildCacheStats(String name, SessionAwareCache cache) {
-		CacheStatisticsMetadata stats = new CacheStatisticsMetadata();
-		stats.setName(name);
-		stats.setHitRatio(cache.getRequestCount() == 0?0:((double)cache.getCacheHitCount()/cache.getRequestCount())*100);
-		stats.setTotalEntries(cache.getTotalCacheEntries());
-		stats.setRequestCount(cache.getRequestCount());
-		return stats;
 	}
 
 	@Override
@@ -752,7 +712,7 @@ class MarkDataSourceAvailable extends TeiidOperationHandler{
 	@Override
 	protected void executeOperation(OperationContext context, DQPCore engine, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.DS_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.DS_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.DS_NAME.getName()+MISSING));
 		}
 		String dsName = operation.get(OperationsConstants.DS_NAME.getName()).asString();
 		ServiceController<?> sc = context.getServiceRegistry(isChangesRuntimes()).getRequiredService(TeiidServiceNames.VDB_STATUS_CHECKER);
@@ -814,14 +774,14 @@ class TerminateTransaction extends TeiidOperationHandler{
 	protected void executeOperation(OperationContext context, DQPCore engine, ModelNode operation) throws OperationFailedException {
 
 		if (!operation.hasDefined(OperationsConstants.XID.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.XID.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.XID.getName()+MISSING));
 		}
 
 		String xid = operation.get(OperationsConstants.XID.getName()).asString();
 		try {
 			engine.terminateTransaction(xid);
 		} catch (AdminException e) {
-			throw new OperationFailedException(e, new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -840,16 +800,16 @@ class ExecuteQuery extends TeiidOperationHandler{
 	protected void executeOperation(OperationContext context, DQPCore engine, ModelNode operation) throws OperationFailedException {
 
 		if (!operation.hasDefined(OperationsConstants.VDB_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.VDB_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.VDB_NAME.getName()+MISSING));
 		}
 		if (!operation.hasDefined(OperationsConstants.VDB_VERSION.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.VDB_VERSION.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.VDB_VERSION.getName()+MISSING));
 		}
 		if (!operation.hasDefined(OperationsConstants.SQL_QUERY.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.SQL_QUERY.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.SQL_QUERY.getName()+MISSING));
 		}
 		if (!operation.hasDefined(OperationsConstants.TIMEOUT_IN_MILLI.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.TIMEOUT_IN_MILLI.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.TIMEOUT_IN_MILLI.getName()+MISSING));
 		}
 
 		ModelNode result = context.getResult();
@@ -890,10 +850,10 @@ class GetVDB extends BaseOperationHandler<VDBRepository>{
 	@Override
 	protected void executeOperation(OperationContext context, VDBRepository repo, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.VDB_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.VDB_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.VDB_NAME.getName()+MISSING));
 		}
 		if (!operation.hasDefined(OperationsConstants.VDB_VERSION.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.VDB_VERSION.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.VDB_VERSION.getName()+MISSING));
 		}
 
 		ModelNode result = context.getResult();
@@ -905,7 +865,7 @@ class GetVDB extends BaseOperationHandler<VDBRepository>{
 			VDBMetadataMapper.INSTANCE.wrap(vdb, result);
 		}
 		else {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50096, vdbName, vdbVersion)));
+			throw new OperationFailedException(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50096, vdbName, vdbVersion));
 		}
 	}
 
@@ -945,13 +905,13 @@ class GetSchema extends BaseOperationHandler<VDBRepository>{
 	@Override
 	protected void executeOperation(OperationContext context, VDBRepository repo, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.VDB_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.VDB_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.VDB_NAME.getName()+MISSING));
 		}
 		if (!operation.hasDefined(OperationsConstants.VDB_VERSION.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.VDB_VERSION.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.VDB_VERSION.getName()+MISSING));
 		}
 		if (!operation.hasDefined(OperationsConstants.MODEL_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.MODEL_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.MODEL_NAME.getName()+MISSING));
 		}
 
 		ModelNode result = context.getResult();
@@ -961,12 +921,12 @@ class GetSchema extends BaseOperationHandler<VDBRepository>{
 
 		VDBMetaData vdb = repo.getLiveVDB(vdbName, vdbVersion);
 		if (vdb == null || (vdb.getStatus() != VDB.Status.ACTIVE)) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50096, vdbName, vdbVersion)));
+			throw new OperationFailedException(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50096, vdbName, vdbVersion));
 		}
 
 		EnumSet<SchemaObjectType> schemaTypes = null;
 		if (vdb.getModel(modelName) == null){
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50097, vdbName, vdbVersion, modelName)));
+			throw new OperationFailedException(IntegrationPlugin.Util.gs(IntegrationPlugin.Event.TEIID50097, vdbName, vdbVersion, modelName));
 		}
 
 		if (operation.hasDefined(OperationsConstants.ENTITY_TYPE.getName())) {
@@ -1076,7 +1036,7 @@ class GetTranslator extends TranslatorOperationHandler{
 	protected void executeOperation(OperationContext context, TranslatorRepository repo, ModelNode operation) throws OperationFailedException {
 
 		if (!operation.hasDefined(OperationsConstants.TRANSLATOR_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.TRANSLATOR_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.TRANSLATOR_NAME.getName()+MISSING));
 		}
 
 		ModelNode result = context.getResult();
@@ -1107,11 +1067,11 @@ abstract class VDBOperations extends BaseOperationHandler<RuntimeVDB>{
 	@Override
 	public RuntimeVDB getService(OperationContext context, PathAddress pathAddress, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.VDB_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.VDB_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.VDB_NAME.getName()+MISSING));
 		}
 
 		if (!operation.hasDefined(OperationsConstants.VDB_VERSION.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.VDB_VERSION.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.VDB_VERSION.getName()+MISSING));
 		}
 
 		String vdbName = operation.get(OperationsConstants.VDB_NAME.getName()).asString();
@@ -1159,11 +1119,11 @@ class AddDataRole extends VDBOperations {
 	@Override
 	protected void executeOperation(OperationContext context, RuntimeVDB vdb, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.DATA_ROLE.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.DATA_ROLE.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.DATA_ROLE.getName()+MISSING));
 		}
 
 		if (!operation.hasDefined(OperationsConstants.MAPPED_ROLE.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.MAPPED_ROLE.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.MAPPED_ROLE.getName()+MISSING));
 		}
 
 		String policyName = operation.get(OperationsConstants.DATA_ROLE.getName()).asString();
@@ -1172,7 +1132,7 @@ class AddDataRole extends VDBOperations {
 		try {
 			vdb.addDataRole(policyName, mappedRole);
 		} catch (AdminProcessingException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -1193,11 +1153,11 @@ class RemoveDataRole extends VDBOperations {
 	@Override
 	protected void executeOperation(OperationContext context, RuntimeVDB vdb, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.DATA_ROLE.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.DATA_ROLE.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.DATA_ROLE.getName()+MISSING));
 		}
 
 		if (!operation.hasDefined(OperationsConstants.MAPPED_ROLE.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.MAPPED_ROLE.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.MAPPED_ROLE.getName()+MISSING));
 		}
 
 		String policyName = operation.get(OperationsConstants.DATA_ROLE.getName()).asString();
@@ -1206,7 +1166,7 @@ class RemoveDataRole extends VDBOperations {
 		try {
 			vdb.remoteDataRole(policyName, mappedRole);
 		} catch (AdminProcessingException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -1227,14 +1187,14 @@ class AddAnyAuthenticatedDataRole extends VDBOperations {
 	@Override
 	protected void executeOperation(OperationContext context, RuntimeVDB vdb, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.DATA_ROLE.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.DATA_ROLE.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.DATA_ROLE.getName()+MISSING));
 		}
 
 		String policyName = operation.get(OperationsConstants.DATA_ROLE.getName()).asString();
 		try {
 			vdb.addAnyAuthenticated(policyName);
 		} catch (AdminProcessingException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -1255,14 +1215,14 @@ class RemoveAnyAuthenticatedDataRole extends VDBOperations {
 	@Override
 	protected void executeOperation(OperationContext context, RuntimeVDB vdb, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.DATA_ROLE.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.DATA_ROLE.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.DATA_ROLE.getName()+MISSING));
 		}
 
 		String policyName = operation.get(OperationsConstants.DATA_ROLE.getName()).asString();
 		try {
 			vdb.removeAnyAuthenticated(policyName);
 		} catch (AdminProcessingException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -1282,14 +1242,14 @@ class ChangeVDBConnectionType extends VDBOperations {
 	@Override
 	protected void executeOperation(OperationContext context, RuntimeVDB vdb, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.CONNECTION_TYPE.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.CONNECTION_TYPE.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.CONNECTION_TYPE.getName()+MISSING));
 		}
 
 		String connectionType = operation.get(OperationsConstants.CONNECTION_TYPE.getName()).asString();
 		try {
 			vdb.changeConnectionType(ConnectionType.valueOf(connectionType));
 		} catch (AdminProcessingException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -1319,7 +1279,7 @@ class RestartVDB extends VDBOperations {
 		try {
 			vdb.restart(models);
 		} catch (AdminProcessingException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -1346,15 +1306,15 @@ class AssignDataSource extends VDBOperations {
 	@Override
 	protected void executeOperation(OperationContext context, RuntimeVDB vdb, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.SOURCE_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.SOURCE_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.SOURCE_NAME.getName()+MISSING));
 		}
 
 		if (!operation.hasDefined(OperationsConstants.TRANSLATOR_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.TRANSLATOR_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.TRANSLATOR_NAME.getName()+MISSING));
 		}
 
 		if (!operation.hasDefined(OperationsConstants.DS_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.DS_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.DS_NAME.getName()+MISSING));
 		}
 
 		String sourceName = operation.get(OperationsConstants.SOURCE_NAME.getName()).asString();
@@ -1367,7 +1327,7 @@ class AssignDataSource extends VDBOperations {
 				updateServices(context, vdb, dsName, rr);
 			}
 		} catch (AdminProcessingException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -1400,19 +1360,19 @@ class AddSource extends VDBOperations {
 	@Override
 	protected void executeOperation(OperationContext context, RuntimeVDB vdb, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.MODEL_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.MODEL_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.MODEL_NAME.getName()+MISSING));
 		}
 
 		if (!operation.hasDefined(OperationsConstants.SOURCE_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.SOURCE_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.SOURCE_NAME.getName()+MISSING));
 		}
 
 		if (!operation.hasDefined(OperationsConstants.TRANSLATOR_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.TRANSLATOR_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.TRANSLATOR_NAME.getName()+MISSING));
 		}
 
 		if (!operation.hasDefined(OperationsConstants.DS_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.DS_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.DS_NAME.getName()+MISSING));
 		}
 
 
@@ -1427,7 +1387,7 @@ class AddSource extends VDBOperations {
 				updateServices(context, vdb, dsName, rr);
 			}
 		} catch (AdminProcessingException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -1450,11 +1410,11 @@ class RemoveSource extends VDBOperations {
 	@Override
 	protected void executeOperation(OperationContext context, RuntimeVDB vdb, ModelNode operation) throws OperationFailedException {
 		if (!operation.hasDefined(OperationsConstants.MODEL_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.MODEL_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.MODEL_NAME.getName()+MISSING));
 		}
 		
 		if (!operation.hasDefined(OperationsConstants.SOURCE_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.SOURCE_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.SOURCE_NAME.getName()+MISSING));
 		}
 
 		String modelName = operation.get(OperationsConstants.MODEL_NAME.getName()).asString();
@@ -1466,7 +1426,7 @@ class RemoveSource extends VDBOperations {
 				updateServices(context, vdb, null, rr);
 			}
 		} catch (AdminProcessingException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 
@@ -1487,25 +1447,35 @@ class ReadTranslatorProperties extends TranslatorOperationHandler {
 	protected void executeOperation(OperationContext context, TranslatorRepository repo, ModelNode operation) throws OperationFailedException {
 
 		if (!operation.hasDefined(OperationsConstants.TRANSLATOR_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.TRANSLATOR_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.TRANSLATOR_NAME.getName()+MISSING));
 		}
 		
         if (!operation.hasDefined(OperationsConstants.PROPERTY_TYPE.getName())) {
-            throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.PROPERTY_TYPE.getName()+MISSING)));
+            throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.PROPERTY_TYPE.getName() + MISSING));
         }		
 
 		ModelNode result = context.getResult();
 		String translatorName = operation.get(OperationsConstants.TRANSLATOR_NAME.getName()).asString();
-		PropertyType type = PropertyType.valueOf(operation.get(OperationsConstants.PROPERTY_TYPE.getName()).asString().toUpperCase());		
-		VDBTranslatorMetaData translator = repo.getTranslatorMetaData(translatorName);
-		if (translator != null) {
-			ExtendedPropertyMetadataList properties = translator.getAttachment(ExtendedPropertyMetadataList.class);
-			for (ExtendedPropertyMetadata epm:properties) {
-			    if (PropertyType.valueOf(epm.category()).equals(type)) {
-			        result.add(buildNode(epm));
-			    }
-			}
-		}
+		
+		String propertyType = operation.get(OperationsConstants.PROPERTY_TYPE.getName()).asString().toUpperCase();
+		TranlatorPropertyType translatorPropertyType = TranlatorPropertyType.valueOf(propertyType);
+
+        VDBTranslatorMetaData translator = repo.getTranslatorMetaData(translatorName);
+        if (translator != null) {
+            ExtendedPropertyMetadataList properties = translator.getAttachment(ExtendedPropertyMetadataList.class);
+            if (translatorPropertyType.equals(TranlatorPropertyType.ALL)) {
+                for (ExtendedPropertyMetadata epm:properties) {
+                    result.add(buildNode(epm));
+                }
+            } else {
+                PropertyType type = PropertyType.valueOf(propertyType);     
+                for (ExtendedPropertyMetadata epm:properties) {
+                    if (PropertyType.valueOf(epm.category()).equals(type)) {
+                        result.add(buildNode(epm));
+                    }
+                }    
+            }
+        }        
 	}
 	
 	static ModelNode buildNode(ExtendedPropertyMetadata prop) {
@@ -1553,6 +1523,10 @@ class ReadTranslatorProperties extends TranslatorOperationHandler {
         if (prop.defaultValue() != null) {
         	node.get(name, DEFAULT).set(prop.defaultValue());
         }
+        
+        if (prop.category() != null) {
+            node.get(name, "category").set(prop.category()); //$NON-NLS-1$
+        }
 		return node;
 	}	
 	
@@ -1575,7 +1549,7 @@ class ReadRARDescription extends TeiidOperationHandler {
 		ModelNode result = context.getResult();
 
 		if (!operation.hasDefined(OperationsConstants.RAR_NAME.getName())) {
-			throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString(OperationsConstants.RAR_NAME.getName()+MISSING)));
+			throw new OperationFailedException(IntegrationPlugin.Util.getString(OperationsConstants.RAR_NAME.getName()+MISSING));
 		}
 		String rarName = operation.get(OperationsConstants.RAR_NAME.getName()).asString();
 
@@ -1591,14 +1565,14 @@ class ReadRARDescription extends TeiidOperationHandler {
 			svcName = ServiceName.JBOSS.append("deployment", "unit").append(rarName); //$NON-NLS-1$ //$NON-NLS-2$
 			sc = context.getServiceRegistry(false).getService(svcName);
 			if (sc == null) {
-				throw new OperationFailedException(new ModelNode().set(IntegrationPlugin.Util.getString("RAR_notfound")));  //$NON-NLS-1$
+				throw new OperationFailedException(IntegrationPlugin.Util.getString("RAR_notfound"));  //$NON-NLS-1$
 			}
 			DeploymentUnit du = DeploymentUnit.class.cast(sc.getValue());
 			ConnectorXmlDescriptor cd = du.getAttachment(ConnectorXmlDescriptor.ATTACHMENT_KEY);
 			ra = cd.getConnector().getResourceadapter();
 		}
-		if (ra instanceof ResourceAdapter1516) {
-			ResourceAdapter1516 ra1516 = (ResourceAdapter1516)ra;
+		if (ra instanceof ResourceAdapter) {
+			ResourceAdapter ra1516 = (ResourceAdapter)ra;
 			result.add(buildReadOnlyNode("resourceadapter-class", ra1516.getResourceadapterClass())); //$NON-NLS-1$
 			List<ConnectionDefinition> connDefinitions = ra1516.getOutboundResourceadapter().getConnectionDefinitions();
 			for (ConnectionDefinition p:connDefinitions) {
@@ -1655,23 +1629,12 @@ class EngineStatistics extends TeiidOperationHandler {
 
 	@Override
 	protected void executeOperation(OperationContext context, DQPCore engine, ModelNode operation) throws OperationFailedException{
-		EngineStatisticsMetadata stats = new EngineStatisticsMetadata();
 		try {
 			BufferManagerService bufferMgrSvc = getBufferManager(context);
-			stats.setSessionCount(getSessionCount(context));
-			stats.setTotalMemoryUsedInKB(bufferMgrSvc.getHeapCacheMemoryInUseKB());
-			stats.setMemoryUsedByActivePlansInKB(bufferMgrSvc.getHeapMemoryInUseByActivePlansKB());
-			stats.setDiskWriteCount(bufferMgrSvc.getDiskWriteCount());
-			stats.setDiskReadCount(bufferMgrSvc.getDiskReadCount());
-			stats.setCacheReadCount(bufferMgrSvc.getCacheReadCount());
-			stats.setCacheWriteCount(bufferMgrSvc.getCacheWriteCount());
-			stats.setDiskSpaceUsedInMB(bufferMgrSvc.getUsedDiskBufferSpaceMB());
-			stats.setActivePlanCount(engine.getActivePlanCount());
-			stats.setWaitPlanCount(engine.getWaitingPlanCount());
-			stats.setMaxWaitPlanWaterMark(engine.getMaxWaitingPlanWatermark());
+			EngineStatisticsMetadata stats = EmbeddedAdminFactory.createEngineStats(getSessionCount(context), bufferMgrSvc, engine);
 			VDBMetadataMapper.EngineStatisticsMetadataMapper.INSTANCE.wrap(stats, context.getResult());
 		} catch (AdminException e) {
-			throw new OperationFailedException(new ModelNode().set(e.getMessage()));
+			throw new OperationFailedException(e);
 		}
 	}
 

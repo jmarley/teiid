@@ -472,7 +472,7 @@ public class TestMMDatabaseMetaData {
             while(rs.next()) {
                 count++;
             }
-            assertEquals(11, count);
+            assertEquals(15, count);
         } finally {
             if(rs != null) {
                 rs.close();
@@ -752,6 +752,20 @@ public class TestMMDatabaseMetaData {
         ResultSet rs2 = dbmd.getProcedures("foo", "Foo%", null); //$NON-NLS-1$ //$NON-NLS-2$ 
     	compareResultSet(rs, rs1, rs2);
     }
+    
+    @Test
+    public void testGetFunctions() throws Exception {
+    	ResultSet rs = dbmd.getFunctions(null, null, null); //$NON-NLS-1$
+    	ResultSet rs1 = dbmd.getFunctions(null, "pg%", "%pg%"); //$NON-NLS-1$
+    	compareResultSet(rs, rs1);
+    }
+    
+    @Test
+    public void testGetFunctionColumns() throws Exception {
+    	ResultSet rs = dbmd.getFunctionColumns(null, null, null, null); //$NON-NLS-1$
+    	ResultSet rs1 = dbmd.getFunctionColumns(null, "pg%", "%pg%", null); //$NON-NLS-1$
+    	compareResultSet(rs, rs1);
+    }
     ///////////////////////////Helper Method//////////////////////////////
 
     private void helpTestSupportsConverts(int from, int to, boolean result) throws Exception {
@@ -890,7 +904,7 @@ public class TestMMDatabaseMetaData {
         expected.put("getSQLStateType", new Integer(2)); //$NON-NLS-1$
 
         // return type -- String
-        expected.put("getCatalogSeparator", ""); //$NON-NLS-1$ //$NON-NLS-2$
+        expected.put("getCatalogSeparator", "."); //$NON-NLS-1$ //$NON-NLS-2$
         expected.put("getCatalogTerm", "VirtualDatabase"); //$NON-NLS-1$ //$NON-NLS-2$
         expected.put("getDatabaseProductName", "Teiid Embedded"); //$NON-NLS-1$ //$NON-NLS-2$
         expected.put("getDatabaseProductVersion", ApplicationInfo.getInstance().getMajorReleaseVersion()+"."+ApplicationInfo.getInstance().getMinorReleaseVersion()); //$NON-NLS-1$ //$NON-NLS-2$

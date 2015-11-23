@@ -35,6 +35,7 @@ import org.teiid.translator.ExecutionContext;
 import org.teiid.translator.TranslatorException;
 import org.teiid.translator.jdbc.TranslatedCommand;
 import org.teiid.translator.jdbc.TranslationHelper;
+import org.teiid.translator.jdbc.Version;
 
 @SuppressWarnings("nls")
 public class TestDB2SqlTranslator {
@@ -106,7 +107,7 @@ public class TestDB2SqlTranslator {
     @Test
     public void testSelectNullLiteral() throws Exception {
         String input = "select null + 1 as x, null || 'a', char(null) from BQT1.Smalla"; //$NON-NLS-1$       
-        String output = "SELECT cast(NULL AS integer) AS x, cast(NULL AS char), cast(NULL AS char(1)) FROM SmallA";  //$NON-NLS-1$
+        String output = "SELECT cast(NULL AS integer) AS x, cast(NULL AS varchar), cast(NULL AS char(1)) FROM SmallA";  //$NON-NLS-1$
         
         helpTestVisitor(FakeTranslationFactory.getInstance().getBQTTranslationUtility(),
                 input, 
@@ -133,7 +134,7 @@ public class TestDB2SqlTranslator {
      */
     @Test public void testLocate() throws Exception {
         String input = "SELECT locate(INTNUM, 'chimp', 1) FROM BQT1.SMALLA"; //$NON-NLS-1$
-        String output = "SELECT LOCATE(char(SmallA.IntNum), 'chimp', 1) FROM SmallA";  //$NON-NLS-1$
+        String output = "SELECT LOCATE(varchar(SmallA.IntNum), 'chimp', 1) FROM SmallA";  //$NON-NLS-1$
 
         TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB,
                 input, output, 
@@ -167,7 +168,7 @@ public class TestDB2SqlTranslator {
      */
     @Test public void testLocate3() throws Exception {
         String input = "SELECT locate(INTNUM, '234567890', 1) FROM BQT1.SMALLA WHERE INTKEY = 26"; //$NON-NLS-1$
-        String output = "SELECT LOCATE(char(SmallA.IntNum), '234567890', 1) FROM SmallA WHERE SmallA.IntKey = 26";  //$NON-NLS-1$
+        String output = "SELECT LOCATE(varchar(SmallA.IntNum), '234567890', 1) FROM SmallA WHERE SmallA.IntKey = 26";  //$NON-NLS-1$
 
         TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB,
                 input, output, 
@@ -253,7 +254,7 @@ public class TestDB2SqlTranslator {
     
     @Test public void testSubstring() throws Exception {
         String input = "SELECT substring(STRINGNUM, 2, 10) FROM BQT1.SMALLA"; //$NON-NLS-1$
-        String output = "SELECT substr(SmallA.StringNum, 2, CASE WHEN 10 > (length(SmallA.StringNum) - (2 - 1)) THEN (length(SmallA.StringNum) - (2 - 1)) ELSE 10 END) FROM SmallA";  //$NON-NLS-1$
+        String output = "SELECT substr(SmallA.StringNum, CASE WHEN 2 > 10 THEN 10 ELSE 2 END, CASE WHEN 10 > (length(SmallA.StringNum) - (CASE WHEN 2 > 10 THEN 10 ELSE 2 END - 1)) THEN (length(SmallA.StringNum) - (CASE WHEN 2 > 10 THEN 10 ELSE 2 END - 1)) ELSE 10 END) FROM SmallA";  //$NON-NLS-1$
 
         TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB,
                 input, output, 
@@ -262,7 +263,16 @@ public class TestDB2SqlTranslator {
     
     @Test public void testSubstring1() throws Exception {
         String input = "SELECT substring(STRINGNUM, 2, intnum) FROM BQT1.SMALLA"; //$NON-NLS-1$
-        String output = "SELECT substr(SmallA.StringNum, 2, CASE WHEN SmallA.IntNum > (length(SmallA.StringNum) - (2 - 1)) THEN (length(SmallA.StringNum) - (2 - 1)) WHEN SmallA.IntNum > 0 THEN SmallA.IntNum END) FROM SmallA";  //$NON-NLS-1$
+        String output = "SELECT substr(SmallA.StringNum, CASE WHEN 2 > SmallA.IntNum THEN SmallA.IntNum ELSE 2 END, CASE WHEN SmallA.IntNum > (length(SmallA.StringNum) - (CASE WHEN 2 > SmallA.IntNum THEN SmallA.IntNum ELSE 2 END - 1)) THEN (length(SmallA.StringNum) - (CASE WHEN 2 > SmallA.IntNum THEN SmallA.IntNum ELSE 2 END - 1)) WHEN SmallA.IntNum > 0 THEN SmallA.IntNum END) FROM SmallA";  //$NON-NLS-1$
+
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB,
+                input, output, 
+                TRANSLATOR);
+    }
+    
+    @Test public void testSubstring2() throws Exception {
+        String input = "SELECT substring(STRINGNUM, 2, -1) FROM BQT1.SMALLA"; //$NON-NLS-1$
+        String output = "SELECT NULL FROM SmallA";  //$NON-NLS-1$
 
         TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB,
                 input, output, 
@@ -281,6 +291,7 @@ public class TestDB2SqlTranslator {
     @Test public void testDB2ForI() throws Exception {
     	DB2ExecutionFactory db2 = new DB2ExecutionFactory();
     	db2.setdB2ForI(true);
+    	db2.setDatabaseVersion(Version.DEFAULT_VERSION);
     	assertFalse(db2.supportsFunctionsInGroupBy());
     	assertFalse(db2.supportsElementaryOlapOperations());
     	db2.setDatabaseVersion(DB2ExecutionFactory.SIX_1.toString());    	
@@ -289,6 +300,15 @@ public class TestDB2SqlTranslator {
     
     @Test public void testTempTable() throws Exception {
     	assertEquals("declare global temporary table foo (COL1 integer, COL2 varchar(100)) not logged", TranslationHelper.helpTestTempTable(TRANSLATOR, true));
+    }
+    
+    @Test public void testRight() throws Exception {
+        String input = "SELECT right(intkey, 2) FROM BQT1.SMALLA"; //$NON-NLS-1$
+        String output = "SELECT right(varchar(SmallA.IntKey), 2) FROM SmallA";  //$NON-NLS-1$
+
+        TranslationHelper.helpTestVisitor(TranslationHelper.BQT_VDB,
+                input, output, 
+                TRANSLATOR);
     }
 
 }

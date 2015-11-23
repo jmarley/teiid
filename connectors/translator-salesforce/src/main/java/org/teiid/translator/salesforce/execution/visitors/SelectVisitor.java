@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.teiid.language.*;
+import org.teiid.language.AndOr.Operator;
 import org.teiid.metadata.Column;
 import org.teiid.metadata.RuntimeMetadata;
 import org.teiid.translator.TranslatorException;
@@ -39,7 +40,6 @@ import org.teiid.translator.salesforce.SalesForcePlugin;
 public class SelectVisitor extends CriteriaVisitor implements IQueryProvidingVisitor {
 	public static final String AGG_PREFIX = "expr"; //$NON-NLS-1$
 	private Map<Integer, Expression> selectSymbolIndexToElement = new HashMap<Integer, Expression>();
-	private Map<String, Integer> selectSymbolNameToIndex = new HashMap<String, Integer>();
 	private int selectSymbolCount;
 	private int idIndex = -1; // index of the ID select symbol.
 	protected List<DerivedColumn> selectSymbols;
@@ -47,14 +47,27 @@ public class SelectVisitor extends CriteriaVisitor implements IQueryProvidingVis
 	protected StringBuilder groupByClause = new StringBuilder();
 	protected StringBuilder havingClause = new StringBuilder();
 	private Boolean objectSupportsRetrieve;
+	private Condition implicitCondition;
 	
 	public SelectVisitor(RuntimeMetadata metadata) {
 		super(metadata);
 	}
 
-	public void visit(Select query) {
+	@Override
+    public void visit(Select query) {
 		super.visitNodes(query.getFrom());
-		super.visitNode(query.getWhere());
+
+		Condition condition = query.getWhere();
+		if (this.implicitCondition != null) {
+		    if (condition != null) {
+		        condition = LanguageFactory.INSTANCE.createAndOr(Operator.AND, condition, this.implicitCondition);
+		    }
+		    else {
+		        condition = implicitCondition;
+		    }
+		}
+		
+		super.visitNode(condition);
 		super.visitNode(query.getGroupBy());
 		if (query.getHaving() != null) {
 			//since the base is a criteria hierarchy visitor,
@@ -74,7 +87,6 @@ public class SelectVisitor extends CriteriaVisitor implements IQueryProvidingVis
 		}
 		selectSymbols = query.getDerivedColumns();
 		selectSymbolCount = selectSymbols.size();
-		int aggCount = 0;
 		for (int index = 0; index < selectSymbols.size(); index++) {
 			DerivedColumn symbol = selectSymbols.get(index);
 			// get the name in source
@@ -82,22 +94,18 @@ public class SelectVisitor extends CriteriaVisitor implements IQueryProvidingVis
 			selectSymbolIndexToElement.put(index, expression);
 			if (expression instanceof ColumnReference) {
 				Column element = ((ColumnReference) expression).getMetadataObject();
-				String qualifiedName = element.getParent().getNameInSource() + ':' + element.getNameInSource();
-				selectSymbolNameToIndex .put(qualifiedName, index);
-				String nameInSource = element.getNameInSource();
-				if (null == nameInSource || nameInSource.length() == 0) {
-					exceptions.add(new TranslatorException("name in source is null or empty for column "+ symbol.toString())); //$NON-NLS-1$
-					continue;
-				}
+				String nameInSource = element.getSourceName();
 				if (nameInSource.equalsIgnoreCase("id")) { //$NON-NLS-1$
 					idIndex = index;
 				}
-			} else if (expression instanceof AggregateFunction) {
-				selectSymbolNameToIndex.put(AGG_PREFIX + (aggCount++), index); 
 			}
 		}
 	}
 	
+    protected void addCriteria(Condition condition) {
+        this.implicitCondition  = condition;
+    }
+    
 	@Override
 	public void visit(GroupBy obj) {
 		this.groupByClause.append("GROUP BY "); //$NON-NLS-1$
@@ -118,7 +126,7 @@ public class SelectVisitor extends CriteriaVisitor implements IQueryProvidingVis
 	        String supportsQuery = table.getProperty(Constants.SUPPORTS_QUERY, true);
 	        objectSupportsRetrieve = Boolean.valueOf(table.getProperty(Constants.SUPPORTS_RETRIEVE, true));
 	        if (!Boolean.valueOf(supportsQuery)) {
-	            throw new TranslatorException(table.getNameInSource() + " " + SalesForcePlugin.Util.getString("CriteriaVisitor.query.not.supported")); //$NON-NLS-1$ //$NON-NLS-2$
+	            throw new TranslatorException(table.getSourceName() + " " + SalesForcePlugin.Util.getString("CriteriaVisitor.query.not.supported")); //$NON-NLS-1$ //$NON-NLS-2$
 	        }
 			loadColumnMetadata(obj);
 		} catch (TranslatorException ce) {
@@ -149,7 +157,7 @@ public class SelectVisitor extends CriteriaVisitor implements IQueryProvidingVis
 		result.append(SPACE);
 
 		result.append(FROM).append(SPACE);
-		result.append(table.getNameInSource()).append(SPACE);
+		result.append(table.getSourceName()).append(SPACE);
 		addCriteriaString(result);
 		appendGroupByHaving(result);
 		//result.append(orderByClause).append(SPACE);
@@ -186,10 +194,6 @@ public class SelectVisitor extends CriteriaVisitor implements IQueryProvidingVis
 
 	public Expression getSelectSymbolMetadata(int index) {
 		return selectSymbolIndexToElement.get(index);
-	}
-	
-	public Integer getSelectSymbolIndex(String name) {
-		return selectSymbolNameToIndex.get(name);
 	}
 	
 	/**
@@ -236,6 +240,10 @@ public class SelectVisitor extends CriteriaVisitor implements IQueryProvidingVis
 	
 	public boolean canRetrieve() {
 		return objectSupportsRetrieve && hasOnlyIDCriteria() && this.limitClause.length() == 0 && groupByClause.length() == 0;
+	}
+
+	public boolean hasGroupBy() {
+		return groupByClause.length() > 0;
 	}
 
 }

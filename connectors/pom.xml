@@ -3,7 +3,7 @@
   <parent>
     <artifactId>teiid-parent</artifactId>
     <groupId>org.jboss.teiid</groupId>
-    <version>8.8.0.Beta2-SNAPSHOT</version>
+    <version>8.13.0.Alpha1-SNAPSHOT</version>
   </parent>
   <modelVersion>4.0.0</modelVersion>
   <artifactId>connectors</artifactId>
@@ -63,19 +63,6 @@
       <scope>test</scope>
     </dependency>        
 
-    <!-- External dependencies
-    <dependency>
-        <groupId>org.jboss</groupId>
-        <artifactId>jboss-vfs</artifactId>
-        <scope>test</scope>
-    </dependency>    
-    <dependency>
-        <groupId>org.jboss.man</groupId>
-        <artifactId>jboss-managed</artifactId>
-        <scope>test</scope>
-    </dependency>     
-     -->
-     
     <dependency>
         <groupId>org.jboss</groupId>
         <artifactId>jboss-vfs</artifactId>
@@ -91,7 +78,6 @@
   
   <modules>
     <module>google-api</module>
-    <module>salesforce-api</module>
     <module>mongodb-api</module>
     <module>simpledb-api</module>
       
@@ -101,6 +87,7 @@
     <module>translator-loopback</module>
     <module>translator-file</module>
     <module>translator-salesforce</module>
+    <module>translator-salesforce-34</module>
     <module>translator-mongodb</module>
     <module>translator-cassandra</module>
     <module>translator-simpledb</module>
@@ -113,22 +100,29 @@
     <module>translator-jpa</module>
     <module>translator-object</module>
     <module>translator-odata</module>
-
+    <module>translator-odata4</module>
+    <module>translator-infinispan-cache</module>
+    <module>translator-infinispan-dsl</module>
     <module>connector-file</module>
     <module>connector-google</module>
     <module>connector-salesforce</module>
+    <module>connector-salesforce-34</module>    
     <module>connector-ldap</module>
     <module>connector-ws</module>
-    <module>connector-infinispan</module>
     <module>connector-mongodb</module>
     <module>connector-cassandra</module>
-    <module>connector-infinispan.6</module>
     <module>connector-simpledb</module>
     <module>connector-accumulo</module>
     <module>connector-solr</module>
-    
+    <module>connector-infinispan-dsl</module>
+    <module>connector-infinispan.6</module>
+    <module>translator-prestodb</module>
     <module>sandbox</module>
+<<<<<<< HEAD
     <module>translator-couchdb</module>
     <module>connector-couchdb</module>
+=======
+    <module>translator-hbase</module>
+>>>>>>> upstream/master
   </modules>
 </project>

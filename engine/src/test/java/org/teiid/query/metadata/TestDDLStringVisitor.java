@@ -21,7 +21,7 @@
  */
 package org.teiid.query.metadata;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.*;
 
 import java.util.Arrays;
 import java.util.HashMap;
@@ -30,7 +30,10 @@ import java.util.Properties;
 
 import org.junit.Test;
 import org.teiid.metadata.BaseColumn.NullType;
-import org.teiid.metadata.*;
+import org.teiid.metadata.Column;
+import org.teiid.metadata.MetadataFactory;
+import org.teiid.metadata.Schema;
+import org.teiid.metadata.Table;
 import org.teiid.query.parser.TestDDLParser;
 import org.teiid.query.unittest.RealMetadataFactory;
 
@@ -237,14 +240,25 @@ public class TestDDLStringVisitor {
 	
 	@Test
 	public void testSourceProcedure() throws Exception {
-		String ddl = "CREATE FOREIGN PROCEDURE myProc(OUT p1 boolean, p2 varchar, INOUT p3 decimal) " +
-				"RETURNS (r1 varchar, r2 decimal)" +
+		String ddl = "CREATE FOREIGN PROCEDURE myProc(OUT p1 boolean options(foo 'bar'), p2 varchar, INOUT p3 decimal) " +
+				"RETURNS options(x 'y') (r1 varchar, r2 decimal)" +
 				"OPTIONS(RANDOM 'any', UUID 'uuid', NAMEINSOURCE 'nis', ANNOTATION 'desc', UPDATECOUNT '2');";
 		
-		String expected = "CREATE FOREIGN PROCEDURE myProc(OUT p1 boolean, IN p2 string, INOUT p3 bigdecimal) RETURNS TABLE (r1 string, r2 bigdecimal)\n" + 
+		String expected = "CREATE FOREIGN PROCEDURE myProc(OUT p1 boolean OPTIONS (foo 'bar'), IN p2 string, INOUT p3 bigdecimal) RETURNS OPTIONS (x 'y') TABLE (r1 string, r2 bigdecimal)\n" + 
 				"OPTIONS (UUID 'uuid', ANNOTATION 'desc', NAMEINSOURCE 'nis', UPDATECOUNT 2, RANDOM 'any')";
 		helpTest(ddl, expected);		
-	}	
+	}
+	
+	@Test
+	public void testSourceFunction() throws Exception {
+		String ddl = "CREATE FOREIGN Function myProc(p1 boolean options(foo 'bar'), p2 varchar) " +
+				"RETURNS options(x 'y') varchar " +
+				"OPTIONS(RANDOM 'any');";
+		
+		String expected = "CREATE FOREIGN FUNCTION myProc(p1 boolean, p2 string) RETURNS OPTIONS (x 'y') string\n"
+				+ "OPTIONS (RANDOM 'any');";
+		helpTest(ddl, expected);		
+	}
 	
 	@Test
 	public void testPushdownFunctionNoArgs() throws Exception {
@@ -259,6 +273,14 @@ public class TestDDLStringVisitor {
 		String ddl = "CREATE FUNCTION SourceFunc(p1 integer, p2 varchar) RETURNS integer OPTIONS (JAVA_CLASS 'foo', JAVA_MEHTOD 'bar')";
 		String expected = "CREATE VIRTUAL FUNCTION SourceFunc(p1 integer, p2 string) RETURNS integer\n" + 
 				"OPTIONS (JAVA_CLASS 'foo', JAVA_MEHTOD 'bar');";
+		helpTest(ddl, expected);
+	}
+	
+	@Test
+	public void testNonPushdownFunction1() throws Exception {
+		String ddl = "CREATE VIRTUAL FUNCTION SourceFunc(p1 integer, p2 string) RETURNS integer\n" + 
+				"as return repeat(p2, p1);";
+		String expected = "CREATE VIRTUAL FUNCTION SourceFunc(OUT \"return\" integer RESULT, IN p1 integer, IN p2 string)\nAS\nRETURN repeat(p2, p1);";
 		helpTest(ddl, expected);
 	}
 
@@ -302,4 +324,12 @@ public class TestDDLStringVisitor {
 		String expected = "CREATE FOREIGN PROCEDURE myProc(OUT p1 boolean, IN p2 string, INOUT p3 bigdecimal) RETURNS TABLE (r1 string(100)[], r2 bigdecimal[][])";
 		helpTest(ddl, expected);		
 	}
+	
+	@Test public void testGeometry() throws Exception {
+		String ddl = "CREATE foreign table G1( e1 geometry)";
+		String expected = "CREATE FOREIGN TABLE G1 (\n" + 
+				"	e1 geometry\n" + 
+				");";
+		helpTest(ddl, expected);
+	}	
 }

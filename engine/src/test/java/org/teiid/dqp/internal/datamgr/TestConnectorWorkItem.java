@@ -63,7 +63,9 @@ import org.teiid.metadata.RuntimeMetadata;
 import org.teiid.query.metadata.QueryMetadataInterface;
 import org.teiid.query.parser.QueryParser;
 import org.teiid.query.resolver.QueryResolver;
+import org.teiid.query.sql.lang.BatchedUpdateCommand;
 import org.teiid.query.sql.lang.Command;
+import org.teiid.query.sql.lang.SourceHint;
 import org.teiid.query.sql.lang.StoredProcedure;
 import org.teiid.query.sql.symbol.Constant;
 import org.teiid.query.unittest.RealMetadataFactory;
@@ -132,22 +134,41 @@ public class TestConnectorWorkItem {
 	}
 
     @Test public void testUpdateExecution() throws Throwable {
-		AtomicResultsMessage results = helpExecuteUpdate();
+		AtomicResultsMessage results = helpExecuteUpdate(false, true);
 		assertEquals(Integer.valueOf(1), results.getResults()[0].get(0));
 	}
 
-	private AtomicResultsMessage helpExecuteUpdate() throws Exception,
+	private AtomicResultsMessage helpExecuteUpdate(boolean batch, boolean single) throws Exception,
 			Throwable {
 		Command command = helpGetCommand("update bqt1.smalla set stringkey = 1 where stringkey = 2", EXAMPLE_BQT); //$NON-NLS-1$
+		if (batch) {
+			command = new BatchedUpdateCommand(Arrays.asList(command, command));
+		}
 		AtomicRequestMessage arm = createNewAtomicRequestMessage(1, 1);
 		arm.setCommand(command);
-		ConnectorWorkItem synchConnectorWorkItem = new ConnectorWorkItem(arm, TestConnectorManager.getConnectorManager());
+		ConnectorManager connectorManager = TestConnectorManager.getConnectorManager();
+		((FakeConnector)connectorManager.getExecutionFactory()).setReturnSingleUpdate(single);
+		ConnectorWorkItem synchConnectorWorkItem = new ConnectorWorkItem(arm, connectorManager);
 		synchConnectorWorkItem.execute();
 		return synchConnectorWorkItem.more();
 	}
 	
+	@Test public void testBatchUpdateExecution() throws Throwable {
+		AtomicResultsMessage results = helpExecuteUpdate(true, false);
+		assertEquals(2, results.getResults().length);
+		assertEquals(Integer.valueOf(1), results.getResults()[0].get(0));
+		assertEquals(1, results.getResults()[1].get(0));
+	}
+	
+	@Test public void testBatchUpdateExecutionSingleResult() throws Throwable {
+		AtomicResultsMessage results = helpExecuteUpdate(true, true);
+		assertEquals(2, results.getResults().length);
+		assertEquals(Integer.valueOf(1), results.getResults()[0].get(0));
+		assertEquals(1, results.getResults()[1].get(0));
+	}
+	
 	@Test public void testExecutionWarning() throws Throwable {
-		AtomicResultsMessage results = helpExecuteUpdate();
+		AtomicResultsMessage results = helpExecuteUpdate(false, false);
 		assertEquals(1, results.getWarnings().size());
 	}
 	
@@ -157,7 +178,7 @@ public class TestConnectorWorkItem {
 		arm.setCommand(command);
 		ConnectorManager cm = TestConnectorManager.getConnectorManager();
 		cm.getExecutionFactory().setSourceRequired(false);
-		ConnectorWorkItem synchConnectorWorkItem = (ConnectorWorkItem) cm.registerRequest(arm);
+		ConnectorWork synchConnectorWorkItem = cm.registerRequest(arm);
 		synchConnectorWorkItem.execute();
 		synchConnectorWorkItem.close();
 		FakeConnector fc = (FakeConnector)cm.getExecutionFactory();
@@ -227,11 +248,11 @@ public class TestConnectorWorkItem {
     	String str = "hello world";
     	
     	Object source = new StreamSource(new StringReader(str));
-    	XMLType xml = (XMLType) ConnectorWorkItem.convertToRuntimeType(bm, source, DataTypeManager.DefaultDataClasses.XML);
+    	XMLType xml = (XMLType) ConnectorWorkItem.convertToRuntimeType(bm, source, DataTypeManager.DefaultDataClasses.XML, null);
     	assertEquals(str, xml.getString());
     	
     	source = new StAXSource(XMLType.getXmlInputFactory().createXMLEventReader(new StringReader("<a/>")));
-    	xml = (XMLType) ConnectorWorkItem.convertToRuntimeType(bm, source, DataTypeManager.DefaultDataClasses.XML);
+    	xml = (XMLType) ConnectorWorkItem.convertToRuntimeType(bm, source, DataTypeManager.DefaultDataClasses.XML, null);
     	XMLInputFactory in = XMLType.getXmlInputFactory();
     	XMLStreamReader reader = in.createXMLStreamReader(new StringReader(xml.getString()));
     	assertEquals(XMLEvent.START_DOCUMENT, reader.getEventType());
@@ -241,7 +262,7 @@ public class TestConnectorWorkItem {
     	
     	byte[] bytes = str.getBytes(Streamable.ENCODING);
 		source = new InputStreamFactory.BlobInputStreamFactory(BlobType.createBlob(bytes));
-    	BlobType blob = (BlobType) ConnectorWorkItem.convertToRuntimeType(bm, source, DataTypeManager.DefaultDataClasses.BLOB);
+    	BlobType blob = (BlobType) ConnectorWorkItem.convertToRuntimeType(bm, source, DataTypeManager.DefaultDataClasses.BLOB, null);
     	
     	assertArrayEquals(bytes, ObjectConverterUtil.convertToByteArray(blob.getBinaryStream()));
     }
@@ -395,5 +416,14 @@ public class TestConnectorWorkItem {
 			//should throw the conversion error
 		}
     }
+    
+	@Test public void testSourcHints() throws Exception {
+		Command command = helpGetCommand("update bqt1.smalla set stringkey = 1 where stringkey = 2", EXAMPLE_BQT); //$NON-NLS-1$
+		command.setSourceHint(new SourceHint());
+		AtomicRequestMessage arm = createNewAtomicRequestMessage(1, 1);
+		arm.setCommand(command);
+		ConnectorManager cm = TestConnectorManager.getConnectorManager();
+		cm.registerRequest(arm);
+	}
 
 }

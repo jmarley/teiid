@@ -25,17 +25,11 @@ package org.teiid.runtime;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.WeakHashMap;
-import java.util.concurrent.Executors;
 
 import javax.resource.spi.work.WorkManager;
 import javax.transaction.TransactionManager;
 
 import org.infinispan.manager.DefaultCacheManager;
-import org.jgroups.Channel;
-import org.jgroups.ChannelListener;
-import org.jgroups.JChannel;
 import org.teiid.cache.CacheFactory;
 import org.teiid.cache.infinispan.InfinispanCacheFactory;
 import org.teiid.core.TeiidRuntimeException;
@@ -45,44 +39,12 @@ import org.teiid.dqp.internal.process.DefaultAuthorizationValidator;
 import org.teiid.dqp.internal.process.TeiidExecutor;
 import org.teiid.dqp.internal.process.ThreadReuseExecutor;
 import org.teiid.query.ObjectReplicator;
-import org.teiid.replication.jgroups.ChannelFactory;
-import org.teiid.replication.jgroups.JGroupsObjectReplicator;
 import org.teiid.security.SecurityHelper;
 import org.teiid.transport.SocketConfiguration;
 
 public class EmbeddedConfiguration extends DQPConfiguration {
 	
-	private final class SimpleChannelFactory implements ChannelFactory, ChannelListener {
-		private final Map<Channel, String> channels = new WeakHashMap<Channel, String>();
-		
-		@Override
-		public Channel createChannel(String id) throws Exception {
-			JChannel channel = new JChannel(this.getClass().getClassLoader().getResource(getJgroupsConfigFile()));
-			channels.put(channel, id);
-			channel.addChannelListener(this);
-			return channel;
-		}
-
-		@Override
-		public void channelClosed(Channel channel) {
-			channels.remove(channel);
-		}
-
-		@Override
-		public void channelConnected(Channel channel) {
-		}
-
-		@Override
-		public void channelDisconnected(Channel channel) {
-		}
-		
-		void stop() {
-			for (Channel c : new ArrayList<Channel>(channels.keySet())) {
-				c.close();
-			}
-		}
-	}
-
+	static final int DEFAULT_MAX_ASYNC_WORKERS = 10;
 	private SecurityHelper securityHelper;
 	private String securityDomain;
 	private TransactionManager transactionManager;
@@ -96,11 +58,33 @@ public class EmbeddedConfiguration extends DQPConfiguration {
 	private String jgroupsConfigFile;
 	private List<SocketConfiguration> transports;
 	private int maxODBCLobSizeAllowed = 5*1024*1024; // 5 MB
+	private int maxAsyncThreads = DEFAULT_MAX_ASYNC_WORKERS;
+	
+	private int processorBatchSize ;
+	private int maxReserveKb ;
+	private int maxProcessingKb ;
+	private boolean inlineLobs = true;
+	private int maxOpenFiles ;
+	
+	private long maxBufferSpace ;
+	private long maxFileSize ;
+	private boolean encryptFiles = false;
+	private int maxStorageObjectSize ;
+	private boolean memoryBufferOffHeap = false;
+	private int memoryBufferSpace ;
 	
 	private DefaultCacheManager manager;
-	private SimpleChannelFactory channelFactory;
 	
 	public EmbeddedConfiguration() {
+		processorBatchSize = -1;
+		maxReserveKb = -1;
+		maxProcessingKb = -1;
+		maxOpenFiles = -1;
+		maxBufferSpace = -1;
+		maxFileSize = -1;
+		maxStorageObjectSize = -1;
+		memoryBufferSpace = -1;
+		
 		DefaultAuthorizationValidator authorizationValidator = new DefaultAuthorizationValidator();
 		authorizationValidator.setPolicyDecider(new DataRolePolicyDecider());
 		this.setAuthorizationValidator(authorizationValidator);
@@ -133,10 +117,6 @@ public class EmbeddedConfiguration extends DQPConfiguration {
 	}
 	
 	public ObjectReplicator getObjectReplicator() {
-		if (this.objectReplicator == null && jgroupsConfigFile != null) {
-			channelFactory = new SimpleChannelFactory();
-			this.objectReplicator = new JGroupsObjectReplicator(channelFactory, Executors.newCachedThreadPool());			
-		}
 		return objectReplicator;
 	}
 	
@@ -227,9 +207,6 @@ public class EmbeddedConfiguration extends DQPConfiguration {
 		if (manager != null) {
 			manager.stop();
 		}
-		if (channelFactory != null) {
-			channelFactory.stop();
-		}
 	}
 	
 	public void addTransport(SocketConfiguration configuration) {
@@ -250,4 +227,100 @@ public class EmbeddedConfiguration extends DQPConfiguration {
 	public void setMaxODBCLobSizeAllowed(int lobSize) {
 		this.maxODBCLobSizeAllowed = lobSize;
 	}	
+	
+    public int getMaxAsyncThreads() {
+        return maxAsyncThreads;
+    }
+
+    public void setMaxAsyncThreads(int maxAsyncThreads) {
+        this.maxAsyncThreads = maxAsyncThreads;
+    }
+
+	public int getProcessorBatchSize() {
+		return processorBatchSize;
+	}
+
+	public void setProcessorBatchSize(int processorBatchSize) {
+		this.processorBatchSize = processorBatchSize;
+	}
+
+	public int getMaxReserveKb() {
+		return maxReserveKb;
+	}
+
+	public void setMaxReserveKb(int maxReserveKb) {
+		this.maxReserveKb = maxReserveKb;
+	}
+
+	public int getMaxProcessingKb() {
+		return maxProcessingKb;
+	}
+
+	public void setMaxProcessingKb(int maxProcessingKb) {
+		this.maxProcessingKb = maxProcessingKb;
+	}
+
+	public boolean isInlineLobs() {
+		return inlineLobs;
+	}
+
+	public void setInlineLobs(boolean inlineLobs) {
+		this.inlineLobs = inlineLobs;
+	}
+
+	public int getMaxOpenFiles() {
+		return maxOpenFiles;
+	}
+
+	public void setMaxOpenFiles(int maxOpenFiles) {
+		this.maxOpenFiles = maxOpenFiles;
+	}
+
+	public long getMaxBufferSpace() {
+		return maxBufferSpace;
+	}
+
+	public void setMaxBufferSpace(long maxBufferSpace) {
+		this.maxBufferSpace = maxBufferSpace;
+	}
+
+	public long getMaxFileSize() {
+		return maxFileSize;
+	}
+
+	public void setMaxFileSize(long maxFileSize) {
+		this.maxFileSize = maxFileSize;
+	}
+
+	public boolean isEncryptFiles() {
+		return encryptFiles;
+	}
+
+	public void setEncryptFiles(boolean encryptFiles) {
+		this.encryptFiles = encryptFiles;
+	}
+
+	public int getMaxStorageObjectSize() {
+		return maxStorageObjectSize;
+	}
+
+	public void setMaxStorageObjectSize(int maxStorageObjectSize) {
+		this.maxStorageObjectSize = maxStorageObjectSize;
+	}
+
+	public boolean isMemoryBufferOffHeap() {
+		return memoryBufferOffHeap;
+	}
+
+	public void setMemoryBufferOffHeap(boolean memoryBufferOffHeap) {
+		this.memoryBufferOffHeap = memoryBufferOffHeap;
+	}
+
+	public int getMemoryBufferSpace() {
+		return memoryBufferSpace;
+	}
+
+	public void setMemoryBufferSpace(int memoryBufferSpace) {
+		this.memoryBufferSpace = memoryBufferSpace;
+	}
 }

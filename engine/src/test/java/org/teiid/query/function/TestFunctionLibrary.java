@@ -59,6 +59,7 @@ import org.teiid.core.util.ObjectConverterUtil;
 import org.teiid.core.util.TimestampWithTimezone;
 import org.teiid.language.SQLConstants.NonReserved;
 import org.teiid.metadata.FunctionMethod.PushDown;
+import org.teiid.query.function.FunctionLibrary.ConversionResult;
 import org.teiid.query.sql.symbol.Expression;
 import org.teiid.query.unittest.RealMetadataFactory;
 import org.teiid.query.unittest.TimestampUtil;
@@ -166,9 +167,13 @@ public class TestFunctionLibrary {
 
 		FunctionDescriptor[] actual;
 		try {
-			actual = library.determineNecessaryConversions(fname, null, new Expression[types.length], types, false);
-			if (actual == null) {
+			ConversionResult result = library.determineNecessaryConversions(fname, null, new Expression[types.length], types, false);
+			if (result.needsConverion) {
+				actual = library.getConverts(result.method, types);
+			} else if (result.method != null) {
 				actual = new FunctionDescriptor[types.length];
+			} else {
+				actual = null;
 			}
 		} catch (InvalidFunctionException e) {
 			actual = null;
@@ -1315,7 +1320,7 @@ public class TestFunctionLibrary {
     
     @Test public void testInvokeWeek() {
         Timestamp time = TimestampUtil.createTimestamp(100, 0, 1, 1, 2, 3, 4);
-        helpInvokeMethod("week", new Object[] { time }, new Integer(1)); //$NON-NLS-1$ 
+        helpInvokeMethod("week", new Object[] { time }, 52); //$NON-NLS-1$ 
     }
     
     @Test public void testInvokeYear() {

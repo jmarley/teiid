@@ -56,6 +56,9 @@ import org.teiid.core.util.HashCodeUtil;
  * @see FunctionParameter
  */
 public class FunctionMethod extends AbstractMetadataRecord {
+	
+	public static final String SYSTEM_NAME = AbstractMetadataRecord.RELATIONAL_URI + "system-name"; //$NON-NLS-1$
+
 	private static final long serialVersionUID = -8039086494296455152L;
 
 	private static final String NOT_ALLOWED = "NOT_ALLOWED"; //$NON-NLS-1$
@@ -67,7 +70,7 @@ public class FunctionMethod extends AbstractMetadataRecord {
 	 * CAN_PUSHDOWN = If the source supports the function, then it will be pushed down. Must supply the Java impl
 	 * CANNOT_PUSHDOWN = It will not be pushed down, evaluated in Teiid. Must supply the Java impl
 	 * MUST_PUSHDOWN = Function must be pushed to source, no need to supply Java impl.
-	 * SYNTHETIC = system functions?
+	 * SYNTHETIC = system functions that will be rewritten
 	 */
 	public enum PushDown {CAN_PUSHDOWN, CANNOT_PUSHDOWN, MUST_PUSHDOWN, SYNTHETIC};
     
@@ -275,7 +278,7 @@ public class FunctionMethod extends AbstractMetadataRecord {
     }
     
     /**
-     * Get ouput parameter.
+     * Get ouput/return parameter.
      * @return Output parameter or return argument
      */
     public FunctionParameter getOutputParameter() { 
@@ -283,7 +286,7 @@ public class FunctionMethod extends AbstractMetadataRecord {
     }
     
     /**
-     * Set ouput parameter.
+     * Set ouput/return parameter.
      * @param param Output Parameter
      */
     public void setOutputParameter(FunctionParameter param) {
